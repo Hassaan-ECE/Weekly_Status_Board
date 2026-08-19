@@ -5,10 +5,11 @@ use crate::theme;
 use crate::ui::dialogs;
 use crate::ui::input::{self, TextInput};
 use crate::ui::{board, footer, header};
+use crate::zoom::{clamp_zoom, step_zoom};
 use chrono::NaiveDate;
 use gpui::{
-    actions, div, prelude::*, px, rgb, Context, Entity, FocusHandle, Focusable, FontWeight,
-    KeyBinding, MouseButton, MouseDownEvent, SharedString, Window,
+    actions, div, prelude::*, px, rgb, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
+    KeyBinding, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Window,
 };
 
 actions!(
@@ -18,7 +19,10 @@ actions!(
         CancelEdit,
         DeleteSelected,
         MoveSelectedLeft,
-        MoveSelectedRight
+        MoveSelectedRight,
+        ZoomIn,
+        ZoomOut,
+        ResetZoom
     ]
 );
 
@@ -72,6 +76,8 @@ pub struct StatusApp {
     pub editing: Editing,
     pub selection: Selection,
     pub input: Entity<TextInput>,
+    board_bounds: Option<Bounds<Pixels>>,
+    resizing_gutter: Option<usize>,
     focus_handle: FocusHandle,
 }
 
@@ -116,6 +122,8 @@ impl StatusApp {
             editing: Editing::None,
             selection: Selection::None,
             input,
+            board_bounds: None,
+            resizing_gutter: None,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -129,12 +137,106 @@ impl StatusApp {
             KeyBinding::new("backspace", DeleteSelected, Some("StatusApp")),
             KeyBinding::new("[", MoveSelectedLeft, Some("StatusApp")),
             KeyBinding::new("]", MoveSelectedRight, Some("StatusApp")),
+            KeyBinding::new("ctrl--", ZoomOut, Some("StatusApp")),
+            KeyBinding::new("ctrl-=", ZoomIn, Some("StatusApp")),
+            KeyBinding::new("ctrl-0", ResetZoom, Some("StatusApp")),
         ]);
     }
 
     fn zoom_label(&self) -> SharedString {
         let pct = (self.board.zoom * 100.0).round() as i32;
         format!("{pct}%").into()
+    }
+
+    pub fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
+        self.view_mode = !self.view_mode;
+        if self.view_mode {
+            self.resizing_gutter = None;
+        }
+        cx.notify();
+    }
+
+    pub fn zoom_in(&mut self, cx: &mut Context<Self>) {
+        self.board.zoom = step_zoom(self.board.zoom, 1);
+        cx.notify();
+    }
+
+    pub fn zoom_out(&mut self, cx: &mut Context<Self>) {
+        self.board.zoom = step_zoom(self.board.zoom, -1);
+        cx.notify();
+    }
+
+    pub fn reset_zoom(&mut self, cx: &mut Context<Self>) {
+        self.board.zoom = clamp_zoom(1.0);
+        cx.notify();
+    }
+
+    fn on_zoom_in(&mut self, _: &ZoomIn, _: &mut Window, cx: &mut Context<Self>) {
+        self.zoom_in(cx);
+    }
+
+    fn on_zoom_out(&mut self, _: &ZoomOut, _: &mut Window, cx: &mut Context<Self>) {
+        self.zoom_out(cx);
+    }
+
+    fn on_reset_zoom(&mut self, _: &ResetZoom, _: &mut Window, cx: &mut Context<Self>) {
+        self.reset_zoom(cx);
+    }
+
+    pub fn set_board_bounds(&mut self, bounds: Bounds<Pixels>) {
+        self.board_bounds = Some(bounds);
+    }
+
+    pub fn begin_column_resize(
+        &mut self,
+        gutter: usize,
+        _position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode || gutter > 1 {
+            return;
+        }
+        self.resizing_gutter = Some(gutter);
+        cx.notify();
+    }
+
+    pub fn on_column_resize_move(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(gutter) = self.resizing_gutter else {
+            return;
+        };
+        let Some(bounds) = self.board_bounds else {
+            return;
+        };
+        let width = f32::from(bounds.size.width);
+        if width <= f32::EPSILON {
+            return;
+        }
+        let rel = ((f32::from(position.x) - f32::from(bounds.origin.x)) / width).clamp(0.0, 1.0);
+        let mut widths = self.board.column_widths;
+        match gutter {
+            0 => {
+                let fixed = widths[2];
+                let available = (1.0 - fixed).max(0.0);
+                let left = rel.clamp(0.18, (available - 0.18).max(0.18));
+                widths[0] = left;
+                widths[1] = (available - left).max(0.18);
+            }
+            1 => {
+                let fixed = widths[0];
+                let boundary = rel.clamp(fixed + 0.18, 1.0 - 0.18);
+                widths[1] = (boundary - fixed).max(0.18);
+                widths[2] = (1.0 - fixed - widths[1]).max(0.18);
+            }
+            _ => return,
+        }
+        self.board.set_column_widths(widths);
+        cx.notify();
+    }
+
+    pub fn end_column_resize(&mut self, cx: &mut Context<Self>) {
+        if self.resizing_gutter.take().is_some() {
+            cx.notify();
+        }
     }
 
     fn today() -> NaiveDate {
@@ -512,8 +614,11 @@ impl Render for StatusApp {
             .on_action(cx.listener(Self::delete_selected))
             .on_action(cx.listener(Self::move_selected_left))
             .on_action(cx.listener(Self::move_selected_right))
+            .on_action(cx.listener(Self::on_zoom_in))
+            .on_action(cx.listener(Self::on_zoom_out))
+            .on_action(cx.listener(Self::on_reset_zoom))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_click_away))
-            .child(header::Header(&theme, zoom_label))
+            .child(header::Header(&theme, zoom_label, view_mode, app.clone()))
             .child(board::Board(
                 &self.board,
                 &theme,

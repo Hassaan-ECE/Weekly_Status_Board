@@ -1,7 +1,13 @@
 use crate::theme::Theme;
-use gpui::{div, prelude::*, px, FontWeight, SharedString};
+use crate::ui::app::StatusApp;
+use gpui::{div, prelude::*, px, Entity, FontWeight, SharedString};
 
-fn quiet_button(id: impl Into<SharedString>, label: impl Into<SharedString>, theme: &Theme) -> impl IntoElement {
+fn quiet_button(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    theme: &Theme,
+    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> impl IntoElement {
     div()
         .id(id.into())
         .flex_none()
@@ -15,7 +21,34 @@ fn quiet_button(id: impl Into<SharedString>, label: impl Into<SharedString>, the
         .text_sm()
         .cursor_pointer()
         .child(label.into())
-        .on_click(|_, _, _| {})
+        .on_click(on_click)
+}
+
+fn toggle_button(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    theme: &Theme,
+    pressed: bool,
+    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id.into())
+        .flex_none()
+        .px_2()
+        .py_1()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(if pressed { theme.primary } else { theme.border })
+        .bg(if pressed { theme.primary } else { theme.fill_4 })
+        .text_color(if pressed {
+            theme.primary_fg
+        } else {
+            theme.foreground
+        })
+        .text_sm()
+        .cursor_pointer()
+        .child(label.into())
+        .on_click(on_click)
 }
 
 fn primary_button(
@@ -39,7 +72,17 @@ fn primary_button(
 }
 
 #[allow(non_snake_case)]
-pub fn Header(theme: &Theme, zoom_label: SharedString) -> impl IntoElement {
+pub fn Header(
+    theme: &Theme,
+    zoom_label: SharedString,
+    view_mode: bool,
+    app: Entity<StatusApp>,
+) -> impl IntoElement {
+    let app_view = app.clone();
+    let app_zoom_out = app.clone();
+    let app_zoom_in = app.clone();
+    let app_zoom_reset = app.clone();
+
     div()
         .id("app-header")
         .flex()
@@ -68,13 +111,23 @@ pub fn Header(theme: &Theme, zoom_label: SharedString) -> impl IntoElement {
                 .items_center()
                 .gap_1()
                 .flex_wrap()
-                .child(quiet_button("btn-new", "New", theme))
-                .child(quiet_button("btn-open", "Open", theme))
-                .child(quiet_button("btn-save", "Save", theme))
-                .child(quiet_button("btn-copy", "Copy image", theme))
-                .child(quiet_button("btn-export", "Export PNG", theme))
-                .child(quiet_button("btn-view", "View", theme))
-                .child(quiet_button("btn-theme", "Dark Theme", theme))
+                .child(quiet_button("btn-new", "New", theme, |_, _, _| {}))
+                .child(quiet_button("btn-open", "Open", theme, |_, _, _| {}))
+                .child(quiet_button("btn-save", "Save", theme, |_, _, _| {}))
+                .child(quiet_button("btn-copy", "Copy image", theme, |_, _, _| {}))
+                .child(quiet_button("btn-export", "Export PNG", theme, |_, _, _| {}))
+                .child(toggle_button(
+                    "btn-view",
+                    "View",
+                    theme,
+                    view_mode,
+                    move |_, _, cx| {
+                        app_view.update(cx, |app, cx| {
+                            app.toggle_view_mode(cx);
+                        });
+                    },
+                ))
+                .child(quiet_button("btn-theme", "Dark Theme", theme, |_, _, _| {}))
                 .child(
                     div()
                         .id("zoom-group")
@@ -88,7 +141,11 @@ pub fn Header(theme: &Theme, zoom_label: SharedString) -> impl IntoElement {
                         .border_1()
                         .border_color(theme.border)
                         .bg(theme.fill_4)
-                        .child(quiet_button("btn-zoom-out", "−", theme))
+                        .child(quiet_button("btn-zoom-out", "−", theme, move |_, _, cx| {
+                            app_zoom_out.update(cx, |app, cx| {
+                                app.zoom_out(cx);
+                            });
+                        }))
                         .child(
                             div()
                                 .id("btn-zoom-label")
@@ -99,9 +156,17 @@ pub fn Header(theme: &Theme, zoom_label: SharedString) -> impl IntoElement {
                                 .text_color(theme.foreground)
                                 .cursor_pointer()
                                 .child(zoom_label)
-                                .on_click(|_, _, _| {}),
+                                .on_click(move |_, _, cx| {
+                                    app_zoom_reset.update(cx, |app, cx| {
+                                        app.reset_zoom(cx);
+                                    });
+                                }),
                         )
-                        .child(quiet_button("btn-zoom-in", "+", theme)),
+                        .child(quiet_button("btn-zoom-in", "+", theme, move |_, _, cx| {
+                            app_zoom_in.update(cx, |app, cx| {
+                                app.zoom_in(cx);
+                            });
+                        })),
                 )
                 .child(primary_button(
                     "btn-meeting",
