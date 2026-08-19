@@ -1,10 +1,10 @@
 use crate::dates::display_date;
 use crate::model::Task;
 use crate::theme::Theme;
-use crate::ui::app::{Editing, StatusApp};
+use crate::ui::app::{DragTask, Editing, Selection, StatusApp};
 use crate::ui::input::TextInput;
 use chrono::NaiveDate;
-use gpui::{div, prelude::*, px, rgb, Entity, FontWeight, SharedString};
+use gpui::{div, prelude::*, px, rgb, Entity, FontWeight, MouseButton, SharedString};
 
 #[allow(non_snake_case)]
 pub fn Card(
@@ -13,6 +13,7 @@ pub fn Card(
     today: NaiveDate,
     view_mode: bool,
     editing: &Editing,
+    selection: &Selection,
     input: Entity<TextInput>,
     app: Entity<StatusApp>,
 ) -> impl IntoElement {
@@ -24,6 +25,10 @@ pub fn Card(
     let date: SharedString = display_date(task.due, today).into();
     let id: SharedString = format!("card-{}", task.id).into();
     let task_id = task.id.clone();
+    let project_id = task.project_id.clone();
+    let task_title = task.title.clone();
+    let task_column = task.column;
+    let selected = matches!(selection, Selection::Card { id } if id == &task.id);
     let editing_title = matches!(editing, Editing::TaskTitle { id } if id == &task.id);
     let editing_due = matches!(editing, Editing::TaskDue { id } if id == &task.id);
 
@@ -91,7 +96,7 @@ pub fn Card(
             .into_any_element()
     };
 
-    div()
+    let mut card = div()
         .id(id)
         .flex()
         .flex_row()
@@ -102,8 +107,76 @@ pub fn Card(
         .py_1()
         .rounded(px(8.))
         .border_1()
-        .border_color(theme.border)
+        .border_color(if selected {
+            theme.primary
+        } else {
+            theme.border
+        })
         .bg(theme.card)
         .child(title_el)
-        .child(date_el)
+        .child(date_el);
+
+    if selected && !view_mode {
+        if let Some(dest) = task_column.left() {
+            let app_left = app.clone();
+            card = card.child(
+                div()
+                    .id(SharedString::from(format!("move-left-{}", task_id)))
+                    .flex_none()
+                    .px_1()
+                    .py_0p5()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.fill_4))
+                    .text_xs()
+                    .child("[")
+                    .on_click(move |_, _, cx| {
+                        app_left.update(cx, |app, cx| {
+                            app.move_selected_side(dest, cx);
+                        });
+                    }),
+            );
+        }
+        if let Some(dest) = task_column.right() {
+            let app_right = app.clone();
+            card = card.child(
+                div()
+                    .id(SharedString::from(format!("move-right-{}", task_id)))
+                    .flex_none()
+                    .px_1()
+                    .py_0p5()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.fill_4))
+                    .text_xs()
+                    .child("]")
+                    .on_click(move |_, _, cx| {
+                        app_right.update(cx, |app, cx| {
+                            app.move_selected_side(dest, cx);
+                        });
+                    }),
+            );
+        }
+    }
+
+    if !view_mode {
+        let app_sel = app.clone();
+        let tid_sel = task_id.clone();
+        card = card
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                app_sel.update(cx, |app, cx| {
+                    app.select_card(&tid_sel, window, cx);
+                });
+            })
+            .on_drag(
+                DragTask {
+                    id: task_id,
+                    project_id,
+                    title: task_title,
+                },
+                |drag, _, _, cx| cx.new(|_| drag.clone()),
+            );
+    }
+
+    card
 }

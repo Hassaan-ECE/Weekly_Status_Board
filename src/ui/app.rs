@@ -2,15 +2,25 @@ use crate::dates::{display_date, parse_date};
 use crate::history::History;
 use crate::model::{BoardDocument, Column};
 use crate::theme;
+use crate::ui::dialogs;
 use crate::ui::input::{self, TextInput};
 use crate::ui::{board, footer, header};
 use chrono::NaiveDate;
 use gpui::{
-    actions, div, prelude::*, Context, Entity, FontWeight, KeyBinding, MouseButton, MouseDownEvent,
-    SharedString, Window,
+    actions, div, prelude::*, px, rgb, Context, Entity, FocusHandle, Focusable, FontWeight,
+    KeyBinding, MouseButton, MouseDownEvent, SharedString, Window,
 };
 
-actions!(board_edit, [CommitEdit, CancelEdit]);
+actions!(
+    board_edit,
+    [
+        CommitEdit,
+        CancelEdit,
+        DeleteSelected,
+        MoveSelectedLeft,
+        MoveSelectedRight
+    ]
+);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Editing {
@@ -20,6 +30,39 @@ pub enum Editing {
     TaskDue { id: String },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Selection {
+    None,
+    Card { id: String },
+    Section { project_id: String, column: Column },
+}
+
+#[derive(Clone, Debug)]
+pub struct DragTask {
+    pub id: String,
+    pub project_id: String,
+    pub title: String,
+}
+
+impl Render for DragTask {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let title: SharedString = if self.title.is_empty() {
+            "Untitled".into()
+        } else {
+            self.title.clone().into()
+        };
+        div()
+            .px_2()
+            .py_1()
+            .rounded(px(8.))
+            .bg(rgb(0x5558E6))
+            .text_color(rgb(0xffffff))
+            .text_sm()
+            .shadow_md()
+            .child(title)
+    }
+}
+
 pub struct StatusApp {
     pub board: BoardDocument,
     pub history: History,
@@ -27,7 +70,9 @@ pub struct StatusApp {
     pub status: String,
     pub theme_dark: bool,
     pub editing: Editing,
+    pub selection: Selection,
     pub input: Entity<TextInput>,
+    focus_handle: FocusHandle,
 }
 
 fn demo_board() -> BoardDocument {
@@ -69,7 +114,9 @@ impl StatusApp {
             status: String::new(),
             theme_dark: false,
             editing: Editing::None,
+            selection: Selection::None,
             input,
+            focus_handle: cx.focus_handle(),
         }
     }
 
@@ -78,6 +125,10 @@ impl StatusApp {
         cx.bind_keys([
             KeyBinding::new("enter", CommitEdit, Some("TextInput")),
             KeyBinding::new("escape", CancelEdit, Some("TextInput")),
+            KeyBinding::new("delete", DeleteSelected, None),
+            KeyBinding::new("backspace", DeleteSelected, None),
+            KeyBinding::new("[", MoveSelectedLeft, None),
+            KeyBinding::new("]", MoveSelectedRight, None),
         ]);
     }
 
@@ -88,6 +139,41 @@ impl StatusApp {
 
     fn today() -> NaiveDate {
         chrono::Local::now().date_naive()
+    }
+
+    fn focus_app(&self, window: &mut Window) {
+        self.focus_handle.focus(window);
+    }
+
+    pub fn select_card(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view_mode {
+            return;
+        }
+        self.selection = Selection::Card { id: id.to_string() };
+        if matches!(self.editing, Editing::None) {
+            self.focus_app(window);
+        }
+        cx.notify();
+    }
+
+    pub fn select_section(
+        &mut self,
+        project_id: &str,
+        column: Column,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode {
+            return;
+        }
+        self.selection = Selection::Section {
+            project_id: project_id.to_string(),
+            column,
+        };
+        if matches!(self.editing, Editing::None) {
+            self.focus_app(window);
+        }
+        cx.notify();
     }
 
     fn begin_edit(
@@ -102,6 +188,18 @@ impl StatusApp {
         }
         if !matches!(self.editing, Editing::None) {
             self.commit_current(cx);
+        }
+        match &editing {
+            Editing::TaskTitle { id } | Editing::TaskDue { id } => {
+                self.selection = Selection::Card { id: id.clone() };
+            }
+            Editing::ProjectName { id, column } => {
+                self.selection = Selection::Section {
+                    project_id: id.clone(),
+                    column: *column,
+                };
+            }
+            Editing::None => {}
         }
         self.editing = editing;
         self.input.update(cx, |input, cx| {
@@ -198,6 +296,119 @@ impl StatusApp {
         );
     }
 
+    pub fn move_selected_side(&mut self, dest: Column, cx: &mut Context<Self>) {
+        if self.view_mode || !matches!(self.editing, Editing::None) {
+            return;
+        }
+        let Selection::Card { id } = &self.selection else {
+            return;
+        };
+        let id = id.clone();
+        self.board.move_task_side(&id, dest);
+        self.history.push(self.board.clone());
+        cx.notify();
+    }
+
+    pub fn move_task_to(
+        &mut self,
+        task_id: &str,
+        dest_column: Column,
+        dest_project_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode {
+            return;
+        }
+        self.board
+            .move_task(task_id, dest_column, dest_project_id);
+        self.history.push(self.board.clone());
+        self.selection = Selection::Card {
+            id: task_id.to_string(),
+        };
+        cx.notify();
+    }
+
+    fn delete_selected(&mut self, _: &DeleteSelected, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view_mode || !matches!(self.editing, Editing::None) {
+            return;
+        }
+        match self.selection.clone() {
+            Selection::None => {}
+            Selection::Card { id } => {
+                self.board.delete_task(&id);
+                self.history.push(self.board.clone());
+                self.selection = Selection::None;
+                cx.notify();
+            }
+            Selection::Section { project_id, column } => {
+                let has_tasks = !self.board.tasks_in(&project_id, column).is_empty();
+                if !has_tasks {
+                    self.board.delete_section(&project_id, column);
+                    self.history.push(self.board.clone());
+                    self.selection = Selection::None;
+                    cx.notify();
+                    return;
+                }
+                let answer = dialogs::confirm_delete_section(window, cx);
+                cx.spawn(async move |this, cx| {
+                    if answer.await.ok() != Some(1) {
+                        return;
+                    }
+                    this.update(cx, |app, cx| {
+                        app.board.delete_section(&project_id, column);
+                        app.history.push(app.board.clone());
+                        app.selection = Selection::None;
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach();
+            }
+        }
+    }
+
+    fn move_selected_left(
+        &mut self,
+        _: &MoveSelectedLeft,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode || !matches!(self.editing, Editing::None) {
+            return;
+        }
+        let Selection::Card { id } = &self.selection else {
+            return;
+        };
+        let Some(col) = self.board.task(id).map(|t| t.column) else {
+            return;
+        };
+        let Some(dest) = col.left() else {
+            return;
+        };
+        self.move_selected_side(dest, cx);
+    }
+
+    fn move_selected_right(
+        &mut self,
+        _: &MoveSelectedRight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode || !matches!(self.editing, Editing::None) {
+            return;
+        }
+        let Selection::Card { id } = &self.selection else {
+            return;
+        };
+        let Some(col) = self.board.task(id).map(|t| t.column) else {
+            return;
+        };
+        let Some(dest) = col.right() else {
+            return;
+        };
+        self.move_selected_side(dest, cx);
+    }
+
     fn commit_current(&mut self, cx: &mut Context<Self>) {
         if matches!(self.editing, Editing::None) {
             return;
@@ -229,7 +440,7 @@ impl StatusApp {
             return;
         }
         self.commit_current(cx);
-        window.blur();
+        self.focus_app(window);
         cx.notify();
     }
 
@@ -238,7 +449,7 @@ impl StatusApp {
             return;
         }
         self.editing = Editing::None;
-        window.blur();
+        self.focus_app(window);
         cx.notify();
     }
 
@@ -255,8 +466,14 @@ impl StatusApp {
             return;
         }
         self.commit_current(cx);
-        window.blur();
+        self.focus_app(window);
         cx.notify();
+    }
+}
+
+impl Focusable for StatusApp {
+    fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 
@@ -270,10 +487,12 @@ impl Render for StatusApp {
         let app = cx.entity();
         let input = self.input.clone();
         let editing = self.editing.clone();
+        let selection = self.selection.clone();
         let view_mode = self.view_mode;
 
         div()
             .id("status-app-root")
+            .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
             .size_full()
@@ -283,6 +502,9 @@ impl Render for StatusApp {
             .font_weight(FontWeight::NORMAL)
             .on_action(cx.listener(Self::commit_edit))
             .on_action(cx.listener(Self::cancel_edit))
+            .on_action(cx.listener(Self::delete_selected))
+            .on_action(cx.listener(Self::move_selected_left))
+            .on_action(cx.listener(Self::move_selected_right))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_click_away))
             .child(header::Header(&theme, zoom_label))
             .child(board::Board(
@@ -291,6 +513,7 @@ impl Render for StatusApp {
                 today,
                 view_mode,
                 &editing,
+                &selection,
                 input,
                 app,
             ))

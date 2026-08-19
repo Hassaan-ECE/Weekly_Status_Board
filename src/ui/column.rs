@@ -1,10 +1,10 @@
 use crate::model::{BoardDocument, Column as ModelColumn, ThemeMode};
 use crate::theme::Theme;
-use crate::ui::app::{Editing, StatusApp};
+use crate::ui::app::{DragTask, Editing, Selection, StatusApp};
 use crate::ui::card::Card;
 use crate::ui::input::TextInput;
 use chrono::NaiveDate;
-use gpui::{div, prelude::*, px, relative, rgb, Entity, FontWeight, Rgba, SharedString};
+use gpui::{div, prelude::*, px, relative, rgb, Entity, FontWeight, MouseButton, Rgba, SharedString};
 
 fn column_title(column: ModelColumn) -> &'static str {
     match column {
@@ -38,6 +38,7 @@ fn project_section(
     column: ModelColumn,
     view_mode: bool,
     editing: &Editing,
+    selection: &Selection,
     input: Entity<TextInput>,
     app: Entity<StatusApp>,
 ) -> impl IntoElement {
@@ -48,6 +49,11 @@ fn project_section(
         editing,
         Editing::ProjectName { id, column: edit_col }
             if id == project_id && *edit_col == column
+    );
+    let selected = matches!(
+        selection,
+        Selection::Section { project_id: sid, column: scol }
+            if sid == project_id && *scol == column
     );
     let pid = project_id.to_string();
 
@@ -71,6 +77,7 @@ fn project_section(
             today,
             view_mode,
             editing,
+            selection,
             input.clone(),
             app.clone(),
         ));
@@ -79,8 +86,9 @@ fn project_section(
     let name_el = if editing_name {
         div()
             .id(SharedString::from(format!(
-                "edit-project-{}",
-                project_id
+                "edit-project-{}-{}",
+                project_id,
+                column.index()
             )))
             .flex_1()
             .min_w_0()
@@ -92,8 +100,9 @@ fn project_section(
         let name: SharedString = project_name.to_string().into();
         div()
             .id(SharedString::from(format!(
-                "project-name-{}",
-                project_id
+                "project-name-{}-{}",
+                project_id,
+                column.index()
             )))
             .flex_1()
             .min_w_0()
@@ -119,12 +128,26 @@ fn project_section(
         .px_2()
         .py_1()
         .bg(theme.fill_4)
+        .border_1()
+        .border_color(if selected {
+            theme.primary
+        } else {
+            theme.fill_4
+        })
         .text_color(project_fg)
         .font_weight(FontWeight::BOLD)
         .text_size(px(12.))
         .child(name_el);
 
     if !view_mode {
+        let app_sel = app.clone();
+        let pid_sel = pid.clone();
+        header = header.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            app_sel.update(cx, |app, cx| {
+                app.select_section(&pid_sel, column, window, cx);
+            });
+        });
+
         let app_add = app.clone();
         let pid_add = pid.clone();
         header = header.child(
@@ -149,7 +172,7 @@ fn project_section(
         );
     }
 
-    div()
+    let mut section = div()
         .id(SharedString::from(format!(
             "section-{}-{}",
             project_id,
@@ -160,7 +183,19 @@ fn project_section(
         .w_full()
         .gap_1()
         .child(header)
-        .child(cards)
+        .child(cards);
+
+    if !view_mode {
+        let app_drop = app.clone();
+        let dest_project = pid.clone();
+        section = section.on_drop(move |drag: &DragTask, _, cx| {
+            app_drop.update(cx, |app, cx| {
+                app.move_task_to(&drag.id, column, &dest_project, cx);
+            });
+        });
+    }
+
+    section
 }
 
 #[allow(non_snake_case)]
@@ -172,6 +207,7 @@ pub fn Column(
     width: f32,
     view_mode: bool,
     editing: &Editing,
+    selection: &Selection,
     input: Entity<TextInput>,
     app: Entity<StatusApp>,
 ) -> impl IntoElement {
@@ -201,6 +237,7 @@ pub fn Column(
                 column,
                 view_mode,
                 editing,
+                selection,
                 input.clone(),
                 app.clone(),
             ));
@@ -234,6 +271,13 @@ pub fn Column(
                     });
                 }),
         );
+
+        let app_drop = app.clone();
+        body = body.on_drop(move |drag: &DragTask, _, cx| {
+            app_drop.update(cx, |app, cx| {
+                app.move_task_to(&drag.id, column, &drag.project_id, cx);
+            });
+        });
     }
 
     div()

@@ -1,6 +1,6 @@
 use crate::model::{BoardDocument, Column as ModelColumn};
 use crate::theme::Theme;
-use crate::ui::app::{Editing, StatusApp};
+use crate::ui::app::{Editing, Selection, StatusApp};
 use crate::ui::column::Column;
 use crate::ui::input::TextInput;
 use chrono::NaiveDate;
@@ -13,6 +13,7 @@ pub fn Board(
     today: NaiveDate,
     view_mode: bool,
     editing: &Editing,
+    selection: &Selection,
     input: Entity<TextInput>,
     app: Entity<StatusApp>,
 ) -> impl IntoElement {
@@ -37,6 +38,7 @@ pub fn Board(
             widths[0],
             view_mode,
             editing,
+            selection,
             input.clone(),
             app.clone(),
         ))
@@ -48,6 +50,7 @@ pub fn Board(
             widths[1],
             view_mode,
             editing,
+            selection,
             input.clone(),
             app.clone(),
         ))
@@ -59,6 +62,7 @@ pub fn Board(
             widths[2],
             view_mode,
             editing,
+            selection,
             input,
             app,
         ))

@@ -1,4 +1,6 @@
-use gpui::{px, size, prelude::*, App, Application, Bounds, WindowBounds, WindowOptions};
+use gpui::{
+    px, size, prelude::*, App, Application, Bounds, Focusable, WindowBounds, WindowOptions,
+};
 use weekly_status_board::ui::app::StatusApp;
 
 fn main() {
@@ -15,7 +17,13 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| StatusApp::new(cx)),
+            |window, cx| {
+                cx.new(|cx| {
+                    let app = StatusApp::new(cx);
+                    app.focus_handle(cx).focus(window);
+                    app
+                })
+            },
         )
         .unwrap();
         cx.activate(true);
