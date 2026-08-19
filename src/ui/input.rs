@@ -83,6 +83,12 @@ impl TextInput {
         window.focus(&self.focus_handle);
     }
 
+    pub fn contains_point(&self, point: Point<Pixels>) -> bool {
+        self.last_bounds
+            .map(|bounds| bounds.contains(&point))
+            .unwrap_or(false)
+    }
+
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), cx);
@@ -147,6 +153,7 @@ impl TextInput {
         } else {
             self.move_to(self.index_for_mouse_position(event.position), cx)
         }
+        cx.stop_propagation();
     }
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _: &mut Context<Self>) {

@@ -6,7 +6,8 @@ use crate::ui::input::{self, TextInput};
 use crate::ui::{board, footer, header};
 use chrono::NaiveDate;
 use gpui::{
-    actions, div, prelude::*, Context, Entity, FontWeight, KeyBinding, SharedString, Window,
+    actions, div, prelude::*, Context, Entity, FontWeight, KeyBinding, MouseButton, MouseDownEvent,
+    SharedString, Window,
 };
 
 actions!(board_edit, [CommitEdit, CancelEdit]);
@@ -98,6 +99,9 @@ impl StatusApp {
     ) {
         if self.view_mode {
             return;
+        }
+        if !matches!(self.editing, Editing::None) {
+            self.commit_current(cx);
         }
         self.editing = editing;
         self.input.update(cx, |input, cx| {
@@ -194,7 +198,7 @@ impl StatusApp {
         );
     }
 
-    fn commit_edit(&mut self, _: &CommitEdit, window: &mut Window, cx: &mut Context<Self>) {
+    fn commit_current(&mut self, cx: &mut Context<Self>) {
         if matches!(self.editing, Editing::None) {
             return;
         }
@@ -218,6 +222,13 @@ impl StatusApp {
             self.history.push(self.board.clone());
         }
         self.editing = Editing::None;
+    }
+
+    fn commit_edit(&mut self, _: &CommitEdit, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.editing, Editing::None) {
+            return;
+        }
+        self.commit_current(cx);
         window.blur();
         cx.notify();
     }
@@ -227,6 +238,23 @@ impl StatusApp {
             return;
         }
         self.editing = Editing::None;
+        window.blur();
+        cx.notify();
+    }
+
+    fn on_click_away(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(self.editing, Editing::None) {
+            return;
+        }
+        if self.input.read(cx).contains_point(event.position) {
+            return;
+        }
+        self.commit_current(cx);
         window.blur();
         cx.notify();
     }
@@ -255,6 +283,7 @@ impl Render for StatusApp {
             .font_weight(FontWeight::NORMAL)
             .on_action(cx.listener(Self::commit_edit))
             .on_action(cx.listener(Self::cancel_edit))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_click_away))
             .child(header::Header(&theme, zoom_label))
             .child(board::Board(
                 &self.board,
