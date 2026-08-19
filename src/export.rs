@@ -1,14 +1,21 @@
-//! Window PNG capture for the Task 2 proof gate.
+//! Board-workspace PNG capture for Copy image / Export PNG.
 //!
-//! GPUI 0.2.2 has no public window-screenshot API (`screenshot` / pixel readback
-//! on `Window`). Capture uses Win32 GDI (BitBlt, with PrintWindow fallback).
-//! Prefer `HasWindowHandle` from the focused GPUI `Window` (available in click
-//! handlers). Task 16 must capture the board region, not rely on foreground-window
-//! heuristics.
+//! GPUI 0.2.2 has no public window-screenshot API. Capture uses Win32
+//! PrintWindow(PW_RENDERFULLCONTENT) via HWND from `HasWindowHandle` (BitBlt is
+//! blank on this DComp window). Task 17 AGENTS.md should note this path.
 
 use anyhow::{bail, Context, Result};
 use std::io::Cursor;
 use std::path::Path;
+
+/// Logical board-workspace rect in window client space (GPUI `Bounds<Pixels>`).
+#[derive(Clone, Copy, Debug)]
+pub struct BoardRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
 
 pub fn write_png_file(path: &Path, bytes: &[u8]) -> Result<()> {
     if path
@@ -22,10 +29,21 @@ pub fn write_png_file(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::write(path, bytes).with_context(|| format!("write {}", path.display()))
 }
 
+pub fn ensure_png_suffix(path: std::path::PathBuf) -> std::path::PathBuf {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("png") => path,
+        _ => {
+            let mut s = path.into_os_string();
+            s.push(".png");
+            std::path::PathBuf::from(s)
+        }
+    }
+}
+
 #[cfg(windows)]
 mod win {
     use super::*;
-    use image::{ImageBuffer, RgbaImage};
+    use image::{imageops::FilterType, DynamicImage, ImageBuffer, RgbaImage};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::Graphics::Gdi::{
@@ -149,7 +167,7 @@ mod win {
     }
 
     pub fn png_from_hwnd(hwnd: HWND, scale: u32) -> Result<Vec<u8>> {
-        let _ = scale; // v1 captures 1× client pixels; Task 16 may request a 2× path
+        let _ = scale; // physical client pixels; densify happens in capture_board_png
         if hwnd.is_invalid() {
             bail!("HWND is null");
         }
@@ -162,21 +180,30 @@ mod win {
                 bail!("capture bounds empty: {width}x{height}");
             }
 
-            let mut pixels = capture_dib(hwnd, width, height, false)
-                .with_context(|| format!("BitBlt capture HWND={:?}", hwnd.0))?;
-            if pixels_look_blank(&pixels) {
-                eprintln!(
-                    "BitBlt capture looked blank; retrying PrintWindow(PW_RENDERFULLCONTENT)"
-                );
-                pixels = capture_dib(hwnd, width, height, true)
-                    .with_context(|| format!("PrintWindow capture HWND={:?}", hwnd.0))?;
-                if pixels_look_blank(&pixels) {
-                    bail!(
-                        "capture still blank/black after BitBlt and PrintWindow ({}x{})",
-                        width,
-                        height
+            // DComp / GPUI windows often fail or blank BitBlt; PrintWindow is the real path.
+            let pixels = match capture_dib(hwnd, width, height, false) {
+                Ok(p) if !pixels_look_blank(&p) => p,
+                Ok(_) => {
+                    eprintln!(
+                        "BitBlt capture looked blank; retrying PrintWindow(PW_RENDERFULLCONTENT)"
                     );
+                    capture_dib(hwnd, width, height, true)
+                        .with_context(|| format!("PrintWindow capture HWND={:?}", hwnd.0))?
                 }
+                Err(err) => {
+                    eprintln!(
+                        "BitBlt capture failed ({err:#}); retrying PrintWindow(PW_RENDERFULLCONTENT)"
+                    );
+                    capture_dib(hwnd, width, height, true)
+                        .with_context(|| format!("PrintWindow capture HWND={:?}", hwnd.0))?
+                }
+            };
+            if pixels_look_blank(&pixels) {
+                bail!(
+                    "capture still blank/black after BitBlt and PrintWindow ({}x{})",
+                    width,
+                    height
+                );
             }
             encode_png(width, height, pixels)
         }
@@ -186,12 +213,93 @@ mod win {
         let hwnd = hwnd_from_window(window)?;
         png_from_hwnd(hwnd, scale)
     }
+
+    /// Capture full client via PrintWindow path, then crop to the board workspace.
+    ///
+    /// `board` is in logical/client pixels; multiplied by `scale_factor` for the
+    /// physical crop. When `scale_factor < 1.5`, the crop is upscaled ×2 so the
+    /// export still meets the spec’s 2× density on 100% DPI displays.
+    pub fn capture_board_png(
+        window: &impl HasWindowHandle,
+        board: BoardRect,
+        scale_factor: f32,
+    ) -> Result<Vec<u8>> {
+        if board.width <= 0.0 || board.height <= 0.0 {
+            bail!("board is not laid out yet");
+        }
+
+        let full_png = capture_window_png(window, 1)
+            .with_context(|| "capture window for board crop")?;
+        let full = image::load_from_memory(&full_png)
+            .context("decode captured PNG")?
+            .to_rgba8();
+        let img_w = full.width();
+        let img_h = full.height();
+
+        let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
+            scale_factor
+        } else {
+            1.0
+        };
+
+        let mut x0 = (board.x * scale).round() as i64;
+        let mut y0 = (board.y * scale).round() as i64;
+        let mut x1 = ((board.x + board.width) * scale).round() as i64;
+        let mut y1 = ((board.y + board.height) * scale).round() as i64;
+
+        x0 = x0.clamp(0, img_w as i64);
+        y0 = y0.clamp(0, img_h as i64);
+        x1 = x1.clamp(0, img_w as i64);
+        y1 = y1.clamp(0, img_h as i64);
+
+        if x1 <= x0 || y1 <= y0 {
+            bail!(
+                "empty board crop after clamp: logical=({:.1},{:.1},{:.1}x{:.1}) scale={scale} image={img_w}x{img_h} phys=({x0},{y0})-({x1},{y1})",
+                board.x,
+                board.y,
+                board.width,
+                board.height
+            );
+        }
+
+        let crop_w = (x1 - x0) as u32;
+        let crop_h = (y1 - y0) as u32;
+        let cropped = image::imageops::crop_imm(&full, x0 as u32, y0 as u32, crop_w, crop_h)
+            .to_image();
+
+        // Spec wants ~2× density; at >=1.5 DPI the physical crop is already dense enough.
+        let out_img: RgbaImage = if scale < 1.5 {
+            image::imageops::resize(
+                &cropped,
+                crop_w.saturating_mul(2).max(1),
+                crop_h.saturating_mul(2).max(1),
+                FilterType::CatmullRom,
+            )
+        } else {
+            cropped
+        };
+
+        let mut out = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(out_img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .context("encode cropped board PNG")?;
+        Ok(out.into_inner())
+    }
 }
 
 #[cfg(windows)]
-pub use win::{capture_window_png, hwnd_from_window, png_from_hwnd};
+pub use win::{capture_board_png, capture_window_png, hwnd_from_window, png_from_hwnd};
 
 #[cfg(not(windows))]
 pub fn capture_window_png<W>(_window: &W, _scale: u32) -> Result<Vec<u8>> {
+    bail!("PNG capture is only implemented on Windows")
+}
+
+#[cfg(not(windows))]
+pub fn capture_board_png<W>(
+    _window: &W,
+    _board: BoardRect,
+    _scale_factor: f32,
+) -> Result<Vec<u8>> {
     bail!("PNG capture is only implemented on Windows")
 }

@@ -58,3 +58,12 @@ pub fn prompt_save_board(
     let rx = cx.prompt_for_new_path(directory, Some("board.board.json"));
     async move { rx.await.map_err(|_| ()) }
 }
+
+/// Export PNG dialog. Suggested name is `board.png`; caller appends `.png` if missing.
+pub fn prompt_export_png(
+    directory: &Path,
+    cx: &mut App,
+) -> impl std::future::Future<Output = Result<anyhow::Result<Option<PathBuf>>, ()>> {
+    let rx = cx.prompt_for_new_path(directory, Some("board.png"));
+    async move { rx.await.map_err(|_| ()) }
+}

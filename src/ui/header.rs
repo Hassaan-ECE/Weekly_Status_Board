@@ -82,6 +82,8 @@ pub fn Header(
     let app_new = app.clone();
     let app_open = app.clone();
     let app_save = app.clone();
+    let app_copy = app.clone();
+    let app_export = app.clone();
     let app_view = app.clone();
     let app_zoom_out = app.clone();
     let app_zoom_in = app.clone();
@@ -131,8 +133,26 @@ pub fn Header(
                         app.save_board_action(cx);
                     });
                 }))
-                .child(quiet_button("btn-copy", "Copy image", theme, |_, _, _| {}))
-                .child(quiet_button("btn-export", "Export PNG", theme, |_, _, _| {}))
+                .child(quiet_button(
+                    "btn-copy",
+                    "Copy image",
+                    theme,
+                    move |_, window, cx| {
+                        app_copy.update(cx, |app, cx| {
+                            app.copy_image(window, cx);
+                        });
+                    },
+                ))
+                .child(quiet_button(
+                    "btn-export",
+                    "Export PNG",
+                    theme,
+                    move |_, window, cx| {
+                        app_export.update(cx, |app, cx| {
+                            app.export_png(window, cx);
+                        });
+                    },
+                ))
                 .child(toggle_button(
                     "btn-view",
                     "View",

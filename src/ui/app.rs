@@ -1,4 +1,5 @@
 use crate::dates::{apply_date_roll, display_date, parse_date};
+use crate::export::{self, BoardRect};
 use crate::history::History;
 use crate::model::{BoardDocument, Column};
 use crate::persistence::{
@@ -12,10 +13,18 @@ use crate::ui::{board, footer, header};
 use crate::zoom::{clamp_zoom, step_zoom};
 use chrono::NaiveDate;
 use gpui::{
-    actions, div, prelude::*, px, rgb, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
-    KeyBinding, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Window,
+    actions, div, prelude::*, px, rgb, Bounds, ClipboardItem, Context, Entity, FocusHandle,
+    Focusable, FontWeight, Image, ImageFormat, KeyBinding, MouseButton, MouseDownEvent, Pixels,
+    Point, SharedString, Window,
 };
 use std::path::PathBuf;
+
+#[derive(Clone, Copy, Debug)]
+enum BoardCaptureKind {
+    Copy,
+    Export,
+    Proof,
+}
 
 actions!(
     board_edit,
@@ -80,6 +89,9 @@ pub struct StatusApp {
     pub history: History,
     pub active_path: Option<PathBuf>,
     pub view_mode: bool,
+    /// Hide edit chrome for one paint so Copy/Export match View look.
+    exporting_clean: bool,
+    export_proof_scheduled: bool,
     pub status: String,
     pub theme_dark: bool,
     pub editing: Editing,
@@ -111,6 +123,8 @@ impl StatusApp {
             history,
             active_path,
             view_mode: false,
+            exporting_clean: false,
+            export_proof_scheduled: false,
             status,
             theme_dark: false,
             editing: Editing::None,
@@ -120,6 +134,172 @@ impl StatusApp {
             resizing_gutter: None,
             focus_handle: cx.focus_handle(),
         }
+    }
+
+    fn board_view_look(&self) -> bool {
+        self.view_mode || self.exporting_clean
+    }
+
+    fn board_rect(&self) -> Option<BoardRect> {
+        let bounds = self.board_bounds?;
+        let width = f32::from(bounds.size.width);
+        let height = f32::from(bounds.size.height);
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        Some(BoardRect {
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            width,
+            height,
+        })
+    }
+
+    pub fn copy_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.begin_board_capture(BoardCaptureKind::Copy, window, cx);
+    }
+
+    pub fn export_png(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.begin_board_capture(BoardCaptureKind::Export, window, cx);
+    }
+
+    fn begin_board_capture(
+        &mut self,
+        kind: BoardCaptureKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.board_rect().is_none() {
+            self.status = "board is not laid out yet".into();
+            cx.notify();
+            return;
+        }
+        // Force View look for the capture frames even if the toggle is off.
+        self.exporting_clean = true;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            // Allow clean layout to paint/present before PrintWindow.
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(200))
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.finish_board_capture(kind, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn finish_board_capture(
+        &mut self,
+        kind: BoardCaptureKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let capture = (|| {
+            let board = self
+                .board_rect()
+                .ok_or_else(|| anyhow::anyhow!("board is not laid out yet"))?;
+            export::capture_board_png(window, board, window.scale_factor())
+        })();
+
+        self.exporting_clean = false;
+
+        match (kind, capture) {
+            (BoardCaptureKind::Copy, Ok(bytes)) => {
+                let image = Image::from_bytes(ImageFormat::Png, bytes);
+                cx.write_to_clipboard(ClipboardItem::new_image(&image));
+                self.status = "Copied board image".into();
+                cx.notify();
+            }
+            (BoardCaptureKind::Export, Ok(bytes)) => {
+                self.save_exported_png(bytes, cx);
+            }
+            (BoardCaptureKind::Proof, Ok(bytes)) => {
+                let path = PathBuf::from("board-export-proof.png");
+                if let Some(board) = self.board_rect() {
+                    eprintln!(
+                        "WSB_EXPORT_PROOF bounds logical=({:.1},{:.1},{:.1}x{:.1}) scale={}",
+                        board.x,
+                        board.y,
+                        board.width,
+                        board.height,
+                        window.scale_factor()
+                    );
+                }
+                match export::write_png_file(&path, &bytes) {
+                    Ok(()) => {
+                        self.status = format!("Wrote {}", path.display());
+                        eprintln!(
+                            "WSB_EXPORT_PROOF wrote {} ({} bytes)",
+                            path.display(),
+                            bytes.len()
+                        );
+                    }
+                    Err(err) => {
+                        self.status = format!("{err:#}");
+                        eprintln!("WSB_EXPORT_PROOF write failed: {err:#}");
+                    }
+                }
+                cx.notify();
+            }
+            (_, Err(err)) => {
+                self.status = format!("{err:#}");
+                if matches!(kind, BoardCaptureKind::Proof) {
+                    eprintln!("WSB_EXPORT_PROOF capture failed: {err:#}");
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    fn save_exported_png(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        let dir = self.save_dir();
+        let prompt = dialogs::prompt_export_png(&dir, cx);
+        cx.spawn(async move |this, cx| {
+            let outcome = prompt.await;
+            this.update(cx, |app, cx| match outcome {
+                Ok(Ok(Some(path))) => {
+                    let path = export::ensure_png_suffix(path);
+                    match export::write_png_file(&path, &bytes) {
+                        Ok(()) => {
+                            app.status = format!("Exported {}", path.display());
+                            cx.notify();
+                        }
+                        Err(err) => {
+                            app.status = format!("{err:#}");
+                            cx.notify();
+                        }
+                    }
+                }
+                Ok(Ok(None)) => {
+                    cx.notify();
+                }
+                Ok(Err(err)) => {
+                    app.status = format!("{err:#}");
+                    cx.notify();
+                }
+                Err(()) => {
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn schedule_export_proof_if_requested(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.export_proof_scheduled {
+            return;
+        }
+        if std::env::var_os("WSB_EXPORT_PROOF").is_none() {
+            return;
+        }
+        self.export_proof_scheduled = true;
+        // Wait one frame for layout bounds, then capture with View look.
+        cx.on_next_frame(window, |this, window, cx| {
+            this.begin_board_capture(BoardCaptureKind::Proof, window, cx);
+        });
     }
 
     pub fn bind_edit_keys(cx: &mut gpui::App) {
@@ -822,6 +1002,7 @@ impl Focusable for StatusApp {
 impl Render for StatusApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title("Weekly Status Board");
+        self.schedule_export_proof_if_requested(window, cx);
         let theme = theme::for_mode(self.theme_dark);
         let status: SharedString = self.status.clone().into();
         let zoom_label = self.zoom_label();
@@ -831,6 +1012,7 @@ impl Render for StatusApp {
         let editing = self.editing.clone();
         let selection = self.selection.clone();
         let view_mode = self.view_mode;
+        let board_view_look = self.board_view_look();
 
         div()
             .id("status-app-root")
@@ -860,7 +1042,7 @@ impl Render for StatusApp {
                 &self.board,
                 &theme,
                 today,
-                view_mode,
+                board_view_look,
                 &editing,
                 &selection,
                 input,

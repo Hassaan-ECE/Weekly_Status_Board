@@ -194,18 +194,23 @@ pub fn Board(
             app.clone(),
         ));
 
-    div()
-        .id("board-workspace")
-        .relative()
-        .flex_1()
-        .w_full()
-        .min_h_0()
-        .px_3()
-        .py_2()
-        .bg(theme.background)
-        .child(ZoomRem {
-            zoom,
-            app,
-            child: Some(row.into_any_element()),
-        })
+    // ZoomRem records board-workspace bounds for Copy/Export crop.
+    ZoomRem {
+        zoom,
+        app,
+        child: Some(
+            div()
+                .id("board-workspace")
+                .relative()
+                .flex_1()
+                .w_full()
+                .h_full()
+                .min_h_0()
+                .px_3()
+                .py_2()
+                .bg(theme.background)
+                .child(row)
+                .into_any_element(),
+        ),
+    }
 }
