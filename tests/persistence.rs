@@ -45,6 +45,28 @@ fn load_normalizes_and_clamps_column_widths() {
     assert!(loaded.column_widths.iter().all(|x| *x >= 0.18 - 1e-5));
 }
 
+#[test]
+fn load_clamps_zoom() {
+    let dir = tempfile_dir();
+    let path = dir.join("zoom.board.json");
+    std::fs::write(
+        &path,
+        r#"{"version":1,"title":"x","theme":"light","zoom":9.0,"column_widths":[0.3,0.3,0.4],"projects":[],"sections":[],"tasks":[]}"#,
+    )
+    .unwrap();
+    let loaded = load_board(&path).unwrap();
+    assert_eq!(loaded.zoom, 1.5);
+}
+
+#[test]
+fn ensure_board_json_suffix_appends_when_missing() {
+    use weekly_status_board::persistence::ensure_board_json_suffix;
+    let path = ensure_board_json_suffix(std::path::PathBuf::from(r"C:\tmp\notes"));
+    assert!(path.to_string_lossy().ends_with(".board.json"));
+    let already = ensure_board_json_suffix(std::path::PathBuf::from(r"C:\tmp\a.board.json"));
+    assert_eq!(already, std::path::PathBuf::from(r"C:\tmp\a.board.json"));
+}
+
 fn tempfile_dir() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("wsb-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();

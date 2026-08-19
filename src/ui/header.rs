@@ -78,6 +78,9 @@ pub fn Header(
     view_mode: bool,
     app: Entity<StatusApp>,
 ) -> impl IntoElement {
+    let app_new = app.clone();
+    let app_open = app.clone();
+    let app_save = app.clone();
     let app_view = app.clone();
     let app_zoom_out = app.clone();
     let app_zoom_in = app.clone();
@@ -111,9 +114,21 @@ pub fn Header(
                 .items_center()
                 .gap_1()
                 .flex_wrap()
-                .child(quiet_button("btn-new", "New", theme, |_, _, _| {}))
-                .child(quiet_button("btn-open", "Open", theme, |_, _, _| {}))
-                .child(quiet_button("btn-save", "Save", theme, |_, _, _| {}))
+                .child(quiet_button("btn-new", "New", theme, move |_, _, cx| {
+                    app_new.update(cx, |app, cx| {
+                        app.new_board(cx);
+                    });
+                }))
+                .child(quiet_button("btn-open", "Open", theme, move |_, _, cx| {
+                    app_open.update(cx, |app, cx| {
+                        app.open_board(cx);
+                    });
+                }))
+                .child(quiet_button("btn-save", "Save", theme, move |_, _, cx| {
+                    app_save.update(cx, |app, cx| {
+                        app.save_board_action(cx);
+                    });
+                }))
                 .child(quiet_button("btn-copy", "Copy image", theme, |_, _, _| {}))
                 .child(quiet_button("btn-export", "Export PNG", theme, |_, _, _| {}))
                 .child(toggle_button(

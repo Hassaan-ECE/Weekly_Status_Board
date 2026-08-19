@@ -1,6 +1,10 @@
-use crate::dates::{display_date, parse_date};
+use crate::dates::{apply_date_roll, display_date, parse_date};
 use crate::history::History;
 use crate::model::{BoardDocument, Column};
+use crate::persistence::{
+    draft_path, ensure_board_json_suffix, load_board, load_startup_board, save_board, save_session,
+    Session,
+};
 use crate::theme;
 use crate::ui::dialogs;
 use crate::ui::input::{self, TextInput};
@@ -11,6 +15,7 @@ use gpui::{
     actions, div, prelude::*, px, rgb, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
     KeyBinding, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Window,
 };
+use std::path::PathBuf;
 
 actions!(
     board_edit,
@@ -22,7 +27,8 @@ actions!(
         MoveSelectedRight,
         ZoomIn,
         ZoomOut,
-        ResetZoom
+        ResetZoom,
+        SaveAs
     ]
 );
 
@@ -70,6 +76,7 @@ impl Render for DragTask {
 pub struct StatusApp {
     pub board: BoardDocument,
     pub history: History,
+    pub active_path: Option<PathBuf>,
     pub view_mode: bool,
     pub status: String,
     pub theme_dark: bool,
@@ -81,43 +88,28 @@ pub struct StatusApp {
     focus_handle: FocusHandle,
 }
 
-fn demo_board() -> BoardDocument {
-    let mut board = BoardDocument::empty();
-    let today = chrono::Local::now().date_naive();
-
-    let (hvdc, target_task) = board.add_project(Column::Target);
-    board.set_project_name(&hvdc, "HVDC");
-    board.set_task_title(&target_task, "Order busbar hardware");
-    board.set_task_due(&target_task, today);
-
-    let progress_task = board.add_task(&hvdc, Column::InProgress);
-    board.set_task_title(&progress_task, "Assemble rectifier rack");
-    board.set_task_due(&progress_task, today.succ_opt().unwrap_or(today));
-
-    // Empty Done section so project heading still shows with no cards.
-    board.ensure_section(&hvdc, Column::Done);
-
-    let (irhx, done_task) = board.add_project(Column::Done);
-    board.set_project_name(&irhx, "IRHX");
-    board.set_task_title(&done_task, "Ship spare fans");
-    board.set_task_due(
-        &done_task,
-        NaiveDate::from_ymd_opt(2025, 12, 15).unwrap_or(today),
-    );
-
-    board
-}
-
 impl StatusApp {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let board = demo_board();
+        let startup = load_startup_board();
+        let mut board = startup.board;
+        let mut status = startup.status;
+        let active_path = startup.active_path;
+        let today = chrono::Local::now().date_naive();
+        if apply_date_roll(&mut board, today) {
+            if let Some(path) = startup.persist_path.as_ref() {
+                if let Err(err) = save_board(path, &board) {
+                    status = format!("{err:#}");
+                }
+            }
+        }
         let history = History::new(board.clone());
         let input = cx.new(|cx| TextInput::new(cx, "", ""));
         Self {
             board,
             history,
+            active_path,
             view_mode: false,
-            status: String::new(),
+            status,
             theme_dark: false,
             editing: Editing::None,
             selection: Selection::None,
@@ -140,12 +132,197 @@ impl StatusApp {
             KeyBinding::new("ctrl--", ZoomOut, Some("StatusApp")),
             KeyBinding::new("ctrl-=", ZoomIn, Some("StatusApp")),
             KeyBinding::new("ctrl-0", ResetZoom, Some("StatusApp")),
+            KeyBinding::new("ctrl-shift-s", SaveAs, Some("StatusApp")),
         ]);
     }
 
     fn zoom_label(&self) -> SharedString {
         let pct = (self.board.zoom * 100.0).round() as i32;
         format!("{pct}%").into()
+    }
+
+    fn persist_path(&self) -> Result<PathBuf, String> {
+        if let Some(path) = &self.active_path {
+            Ok(path.clone())
+        } else {
+            draft_path().map_err(|e| format!("{e:#}"))
+        }
+    }
+
+    fn persist_now(&mut self) {
+        match self.persist_path() {
+            Ok(path) => {
+                if let Err(err) = save_board(&path, &self.board) {
+                    self.status = format!("{err:#}");
+                }
+            }
+            Err(err) => self.status = err,
+        }
+    }
+
+    fn save_dir(&self) -> PathBuf {
+        if let Some(path) = &self.active_path {
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    return parent.to_path_buf();
+                }
+            }
+        }
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            let docs = PathBuf::from(home).join("Documents");
+            if docs.is_dir() {
+                return docs;
+            }
+        }
+        crate::persistence::app_data_dir().unwrap_or_else(|_| PathBuf::from("."))
+    }
+
+    fn remember_active_path(&mut self, path: PathBuf) {
+        self.active_path = Some(path.clone());
+        if let Err(err) = save_session(&Session {
+            active_path: Some(path),
+        }) {
+            self.status = format!("{err:#}");
+        }
+    }
+
+    fn clear_active_path_session(&mut self) {
+        self.active_path = None;
+        if let Err(err) = save_session(&Session { active_path: None }) {
+            self.status = format!("{err:#}");
+        }
+    }
+
+    fn reset_to_empty_unnamed(&mut self, cx: &mut Context<Self>) {
+        self.board = BoardDocument::empty();
+        self.history = History::new(self.board.clone());
+        self.editing = Editing::None;
+        self.selection = Selection::None;
+        self.clear_active_path_session();
+        if let Ok(draft) = draft_path() {
+            let _ = save_board(&draft, &self.board);
+        }
+        self.status.clear();
+        cx.notify();
+    }
+
+    fn apply_loaded_board(&mut self, path: PathBuf, mut board: BoardDocument, cx: &mut Context<Self>) {
+        let changed = apply_date_roll(&mut board, Self::today());
+        if changed {
+            if let Err(err) = save_board(&path, &board) {
+                self.status = format!("{err:#}");
+            } else {
+                self.status.clear();
+            }
+        } else {
+            self.status.clear();
+        }
+        self.board = board;
+        self.history = History::new(self.board.clone());
+        self.editing = Editing::None;
+        self.selection = Selection::None;
+        self.remember_active_path(path);
+        cx.notify();
+    }
+
+    fn load_opened_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        match load_board(&path) {
+            Ok(board) => self.apply_loaded_board(path, board, cx),
+            Err(err) => {
+                self.status = format!("{err:#}");
+                self.board = BoardDocument::empty();
+                self.history = History::new(self.board.clone());
+                self.editing = Editing::None;
+                self.selection = Selection::None;
+                self.active_path = None;
+                cx.notify();
+            }
+        }
+    }
+
+    fn write_to_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let path = ensure_board_json_suffix(path);
+        match save_board(&path, &self.board) {
+            Ok(()) => {
+                self.status.clear();
+                self.remember_active_path(path);
+                cx.notify();
+            }
+            Err(err) => {
+                self.status = format!("{err:#}");
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn new_board(&mut self, cx: &mut Context<Self>) {
+        if self.active_path.is_none() && !self.board.is_blank() {
+            self.save_as(cx, true);
+            return;
+        }
+        if self.active_path.is_some() {
+            self.persist_now();
+        }
+        self.reset_to_empty_unnamed(cx);
+    }
+
+    pub fn open_board(&mut self, cx: &mut Context<Self>) {
+        let prompt = dialogs::prompt_open_board(cx);
+        cx.spawn(async move |this, cx| {
+            let outcome = prompt.await;
+            this.update(cx, |app, cx| match outcome {
+                Ok(Ok(Some(paths))) => {
+                    if let Some(path) = paths.into_iter().next() {
+                        app.load_opened_path(path, cx);
+                    }
+                }
+                Ok(Ok(None)) => {}
+                Ok(Err(err)) => {
+                    app.status = format!("{err:#}");
+                    cx.notify();
+                }
+                Err(()) => {}
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn save_board_action(&mut self, cx: &mut Context<Self>) {
+        if self.active_path.is_some() {
+            self.persist_now();
+            cx.notify();
+        } else {
+            self.save_as(cx, false);
+        }
+    }
+
+    pub fn save_as(&mut self, cx: &mut Context<Self>, then_new: bool) {
+        let dir = self.save_dir();
+        let prompt = dialogs::prompt_save_board(&dir, cx);
+        cx.spawn(async move |this, cx| {
+            let outcome = prompt.await;
+            this.update(cx, |app, cx| match outcome {
+                Ok(Ok(Some(path))) => {
+                    app.write_to_path(path, cx);
+                    if then_new && app.active_path.is_some() {
+                        app.reset_to_empty_unnamed(cx);
+                    }
+                }
+                Ok(Ok(None)) => {}
+                Ok(Err(err)) => {
+                    app.status = format!("{err:#}");
+                    cx.notify();
+                }
+                Err(()) => {}
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn on_save_as(&mut self, _: &SaveAs, _: &mut Window, cx: &mut Context<Self>) {
+        self.save_as(cx, false);
     }
 
     pub fn toggle_view_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -162,16 +339,19 @@ impl StatusApp {
 
     pub fn zoom_in(&mut self, cx: &mut Context<Self>) {
         self.board.zoom = step_zoom(self.board.zoom, 1);
+        self.persist_now();
         cx.notify();
     }
 
     pub fn zoom_out(&mut self, cx: &mut Context<Self>) {
         self.board.zoom = step_zoom(self.board.zoom, -1);
+        self.persist_now();
         cx.notify();
     }
 
     pub fn reset_zoom(&mut self, cx: &mut Context<Self>) {
         self.board.zoom = clamp_zoom(1.0);
+        self.persist_now();
         cx.notify();
     }
 
@@ -239,6 +419,7 @@ impl StatusApp {
 
     pub fn end_column_resize(&mut self, cx: &mut Context<Self>) {
         if self.resizing_gutter.take().is_some() {
+            self.persist_now();
             cx.notify();
         }
     }
@@ -370,6 +551,7 @@ impl StatusApp {
         }
         let task_id = self.board.add_task(project_id, column);
         self.history.push(self.board.clone());
+        self.persist_now();
         self.begin_edit(Editing::TaskTitle { id: task_id }, String::new(), window, cx);
     }
 
@@ -384,6 +566,7 @@ impl StatusApp {
         }
         let (project_id, _) = self.board.add_project(column);
         self.history.push(self.board.clone());
+        self.persist_now();
         let name = self
             .board
             .projects
@@ -412,6 +595,7 @@ impl StatusApp {
         let id = id.clone();
         self.board.move_task_side(&id, dest);
         self.history.push(self.board.clone());
+        self.persist_now();
         cx.notify();
     }
 
@@ -434,6 +618,7 @@ impl StatusApp {
         self.board
             .move_task(task_id, dest_column, dest_project_id);
         self.history.push(self.board.clone());
+        self.persist_now();
         self.selection = Selection::Card {
             id: task_id.to_string(),
         };
@@ -449,6 +634,7 @@ impl StatusApp {
             Selection::Card { id } => {
                 self.board.delete_task(&id);
                 self.history.push(self.board.clone());
+                self.persist_now();
                 self.selection = Selection::None;
                 cx.notify();
             }
@@ -457,6 +643,7 @@ impl StatusApp {
                 if !has_tasks {
                     self.board.delete_section(&project_id, column);
                     self.history.push(self.board.clone());
+                    self.persist_now();
                     self.selection = Selection::None;
                     cx.notify();
                     return;
@@ -469,6 +656,7 @@ impl StatusApp {
                     this.update(cx, |app, cx| {
                         app.board.delete_section(&project_id, column);
                         app.history.push(app.board.clone());
+                        app.persist_now();
                         app.selection = Selection::None;
                         cx.notify();
                     })
@@ -543,6 +731,7 @@ impl StatusApp {
         }
         if self.board != before {
             self.history.push(self.board.clone());
+            self.persist_now();
         }
         self.editing = Editing::None;
     }
@@ -621,6 +810,7 @@ impl Render for StatusApp {
             .on_action(cx.listener(Self::on_zoom_in))
             .on_action(cx.listener(Self::on_zoom_out))
             .on_action(cx.listener(Self::on_reset_zoom))
+            .on_action(cx.listener(Self::on_save_as))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_click_away))
             .child(header::Header(&theme, zoom_label, view_mode, app.clone()))
             .child(board::Board(
