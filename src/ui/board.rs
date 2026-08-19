@@ -5,13 +5,14 @@ use crate::ui::column::Column;
 use crate::ui::input::TextInput;
 use chrono::NaiveDate;
 use gpui::{
-    canvas, div, prelude::*, px, AnyElement, App, Bounds, DispatchPhase, Element, ElementId,
-    Entity, GlobalElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    div, prelude::*, px, AnyElement, App, Bounds, DispatchPhase, Element, ElementId, Entity,
+    GlobalElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Pixels, Window,
 };
 
 struct ZoomRem {
     zoom: f32,
+    app: Entity<StatusApp>,
     child: Option<AnyElement>,
 }
 
@@ -52,11 +53,14 @@ impl Element for ZoomRem {
         &mut self,
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&gpui::InspectorElementId>,
-        _bounds: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         child: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.app.update(cx, |app, _| {
+            app.set_board_bounds(bounds);
+        });
         let rem = px(16.0 * self.zoom);
         window.with_rem_size(Some(rem), |window| {
             child.prepaint(window, cx);
@@ -73,6 +77,25 @@ impl Element for ZoomRem {
         window: &mut Window,
         cx: &mut App,
     ) {
+        let app_move = self.app.clone();
+        let app_up = self.app.clone();
+        window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+            if phase != DispatchPhase::Bubble || !ev.dragging() {
+                return;
+            }
+            app_move.update(cx, |app, cx| {
+                app.on_column_resize_move(ev.position, cx);
+            });
+        });
+        window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            app_up.update(cx, |app, cx| {
+                app.end_column_resize(cx);
+            });
+        });
+
         let rem = px(16.0 * self.zoom);
         window.with_rem_size(Some(rem), |window| {
             child.paint(window, cx);
@@ -125,8 +148,6 @@ pub fn Board(
 ) -> impl IntoElement {
     let widths = board.column_widths;
     let zoom = board.zoom;
-    let app_bounds = app.clone();
-    let app_mouse = app.clone();
 
     let row = div()
         .id("board-columns")
@@ -170,7 +191,7 @@ pub fn Board(
             editing,
             selection,
             input,
-            app,
+            app.clone(),
         ));
 
     div()
@@ -184,41 +205,7 @@ pub fn Board(
         .bg(theme.background)
         .child(ZoomRem {
             zoom,
+            app,
             child: Some(row.into_any_element()),
         })
-        .child(
-            canvas(
-                move |bounds, _, cx| {
-                    app_bounds.update(cx, |app, _| {
-                        app.set_board_bounds(bounds);
-                    });
-                },
-                move |_, _, window, _cx| {
-                    let app = app_mouse.clone();
-                    window.on_mouse_event({
-                        let app = app.clone();
-                        move |ev: &MouseMoveEvent, phase, _, cx| {
-                            if phase != DispatchPhase::Bubble || !ev.dragging() {
-                                return;
-                            }
-                            app.update(cx, |app, cx| {
-                                app.on_column_resize_move(ev.position, cx);
-                            });
-                        }
-                    });
-                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                        if phase != DispatchPhase::Bubble {
-                            return;
-                        }
-                        app.update(cx, |app, cx| {
-                            app.end_column_resize(cx);
-                        });
-                    });
-                },
-            )
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full(),
-        )
 }

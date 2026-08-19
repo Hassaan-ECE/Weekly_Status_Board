@@ -121,9 +121,9 @@ pub fn Header(
                     "View",
                     theme,
                     view_mode,
-                    move |_, _, cx| {
+                    move |_, window, cx| {
                         app_view.update(cx, |app, cx| {
-                            app.toggle_view_mode(cx);
+                            app.toggle_view_mode(window, cx);
                         });
                     },
                 ))

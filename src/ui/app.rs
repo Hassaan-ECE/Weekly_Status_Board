@@ -148,10 +148,14 @@ impl StatusApp {
         format!("{pct}%").into()
     }
 
-    pub fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
+    pub fn toggle_view_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.view_mode = !self.view_mode;
         if self.view_mode {
             self.resizing_gutter = None;
+            if !matches!(self.editing, Editing::None) {
+                self.editing = Editing::None;
+                self.focus_app(window);
+            }
         }
         cx.notify();
     }
