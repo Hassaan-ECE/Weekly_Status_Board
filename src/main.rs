@@ -1,8 +1,9 @@
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, SharedString, Window,
+    div, prelude::*, px, size, App, Application, Bounds, Context, SharedString, Window,
     WindowBounds, WindowOptions,
 };
 use std::path::PathBuf;
+use weekly_status_board::theme;
 
 struct HelloWorld {
     text: SharedString,
@@ -11,16 +12,17 @@ struct HelloWorld {
 impl Render for HelloWorld {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title("Weekly Status Board");
+        let theme = theme::light();
         div()
             .id("root-capture")
             .flex()
             .flex_col()
-            .bg(rgb(0xffffff))
+            .bg(theme.background)
             .size_full()
             .justify_center()
             .items_center()
             .gap_4()
-            .text_color(rgb(0x262626))
+            .text_color(theme.foreground)
             .cursor_pointer()
             .on_click(|_event, window, _cx| {
                 let path = PathBuf::from("capture-proof.png");
@@ -43,8 +45,8 @@ impl Render for HelloWorld {
                     .id("save-png")
                     .px_4()
                     .py_2()
-                    .bg(rgb(0x2563eb))
-                    .text_color(rgb(0xffffff))
+                    .bg(theme.primary)
+                    .text_color(theme.primary_fg)
                     .rounded_md()
                     .child("Save PNG"),
             )
