@@ -45,14 +45,14 @@ mod win {
     use super::*;
     use image::{imageops::FilterType, DynamicImage, ImageBuffer, RgbaImage};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::Foundation::{HWND, POINT, RECT};
     use windows::Win32::Graphics::Gdi::{
-        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
-        GetDIBits, ReleaseDC, SelectObject, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
-        SRCCOPY,
+        BitBlt, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+        GetDC, GetDIBits, ReleaseDC, SelectObject, BI_RGB, BITMAPINFO, BITMAPINFOHEADER,
+        DIB_RGB_COLORS, SRCCOPY,
     };
     use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
-    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+    use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
 
     /// PW_RENDERFULLCONTENT (undocumented in older SDKs; value 2).
     const PW_RENDERFULLCONTENT: PRINT_WINDOW_FLAGS = PRINT_WINDOW_FLAGS(2);
@@ -166,45 +166,52 @@ mod win {
         Ok(pixels)
     }
 
+    /// Capture full window pixels (including non-client titlebar).
+    /// PrintWindow(PW_RENDERFULLCONTENT) paints NC into the bitmap; size must match GetWindowRect.
+    unsafe fn capture_window_pixels(hwnd: HWND) -> Result<(i32, i32, Vec<u8>)> {
+        let mut win = RECT::default();
+        GetWindowRect(hwnd, &mut win).context("GetWindowRect")?;
+        let width = win.right - win.left;
+        let height = win.bottom - win.top;
+        if width <= 0 || height <= 0 {
+            bail!("capture bounds empty: {width}x{height}");
+        }
+
+        // DComp / GPUI windows often fail or blank BitBlt; PrintWindow is the real path.
+        let pixels = match capture_dib(hwnd, width, height, false) {
+            Ok(p) if !pixels_look_blank(&p) => p,
+            Ok(_) => {
+                eprintln!(
+                    "BitBlt capture looked blank; retrying PrintWindow(PW_RENDERFULLCONTENT)"
+                );
+                capture_dib(hwnd, width, height, true)
+                    .with_context(|| format!("PrintWindow capture HWND={:?}", hwnd.0))?
+            }
+            Err(err) => {
+                eprintln!(
+                    "BitBlt capture failed ({err:#}); retrying PrintWindow(PW_RENDERFULLCONTENT)"
+                );
+                capture_dib(hwnd, width, height, true)
+                    .with_context(|| format!("PrintWindow capture HWND={:?}", hwnd.0))?
+            }
+        };
+        if pixels_look_blank(&pixels) {
+            bail!(
+                "capture still blank/black after BitBlt and PrintWindow ({}x{})",
+                width,
+                height
+            );
+        }
+        Ok((width, height, pixels))
+    }
+
     pub fn png_from_hwnd(hwnd: HWND, scale: u32) -> Result<Vec<u8>> {
-        let _ = scale; // physical client pixels; densify happens in capture_board_png
+        let _ = scale; // physical pixels; densify happens in capture_board_png
         if hwnd.is_invalid() {
             bail!("HWND is null");
         }
         unsafe {
-            let mut rect = RECT::default();
-            GetClientRect(hwnd, &mut rect).context("GetClientRect")?;
-            let width = rect.right - rect.left;
-            let height = rect.bottom - rect.top;
-            if width <= 0 || height <= 0 {
-                bail!("capture bounds empty: {width}x{height}");
-            }
-
-            // DComp / GPUI windows often fail or blank BitBlt; PrintWindow is the real path.
-            let pixels = match capture_dib(hwnd, width, height, false) {
-                Ok(p) if !pixels_look_blank(&p) => p,
-                Ok(_) => {
-                    eprintln!(
-                        "BitBlt capture looked blank; retrying PrintWindow(PW_RENDERFULLCONTENT)"
-                    );
-                    capture_dib(hwnd, width, height, true)
-                        .with_context(|| format!("PrintWindow capture HWND={:?}", hwnd.0))?
-                }
-                Err(err) => {
-                    eprintln!(
-                        "BitBlt capture failed ({err:#}); retrying PrintWindow(PW_RENDERFULLCONTENT)"
-                    );
-                    capture_dib(hwnd, width, height, true)
-                        .with_context(|| format!("PrintWindow capture HWND={:?}", hwnd.0))?
-                }
-            };
-            if pixels_look_blank(&pixels) {
-                bail!(
-                    "capture still blank/black after BitBlt and PrintWindow ({}x{})",
-                    width,
-                    height
-                );
-            }
+            let (width, height, pixels) = capture_window_pixels(hwnd)?;
             encode_png(width, height, pixels)
         }
     }
@@ -214,7 +221,10 @@ mod win {
         png_from_hwnd(hwnd, scale)
     }
 
-    /// Capture full client via PrintWindow path, then crop to the board workspace.
+    /// Capture full window via PrintWindow path, then crop to the board workspace.
+    ///
+    /// PrintWindow paints the non-client titlebar into the bitmap, so board coords
+    /// (client-relative) are offset by `nc_left`/`nc_top` before cropping.
     ///
     /// `board` is in logical/client pixels; multiplied by `scale_factor` for the
     /// physical crop. When `scale_factor < 1.5`, the crop is upscaled ×2 so the
@@ -228,13 +238,31 @@ mod win {
             bail!("board is not laid out yet");
         }
 
-        let full_png = capture_window_png(window, 1)
-            .with_context(|| "capture window for board crop")?;
-        let full = image::load_from_memory(&full_png)
-            .context("decode captured PNG")?
-            .to_rgba8();
-        let img_w = full.width();
-        let img_h = full.height();
+        let hwnd = hwnd_from_window(window)?;
+        if hwnd.is_invalid() {
+            bail!("HWND is null");
+        }
+
+        let (nc_left, nc_top, img_w, img_h, pixels) = unsafe {
+            let mut win = RECT::default();
+            GetWindowRect(hwnd, &mut win).context("GetWindowRect")?;
+            let mut client = RECT::default();
+            GetClientRect(hwnd, &mut client).context("GetClientRect")?;
+            let _ = client; // size comes from GetWindowRect / PrintWindow bitmap
+            let mut origin = POINT { x: 0, y: 0 };
+            ClientToScreen(hwnd, &mut origin)
+                .ok()
+                .context("ClientToScreen")?;
+            let nc_left = origin.x - win.left;
+            let nc_top = origin.y - win.top;
+
+            let (width, height, pixels) = capture_window_pixels(hwnd)
+                .with_context(|| "capture window for board crop")?;
+            (nc_left, nc_top, width as u32, height as u32, pixels)
+        };
+
+        let full: RgbaImage = ImageBuffer::from_raw(img_w, img_h, pixels)
+            .context("ImageBuffer::from_raw full window")?;
 
         let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
             scale_factor
@@ -242,10 +270,10 @@ mod win {
             1.0
         };
 
-        let mut x0 = (board.x * scale).round() as i64;
-        let mut y0 = (board.y * scale).round() as i64;
-        let mut x1 = ((board.x + board.width) * scale).round() as i64;
-        let mut y1 = ((board.y + board.height) * scale).round() as i64;
+        let mut x0 = nc_left as i64 + (board.x * scale).round() as i64;
+        let mut y0 = nc_top as i64 + (board.y * scale).round() as i64;
+        let mut x1 = nc_left as i64 + ((board.x + board.width) * scale).round() as i64;
+        let mut y1 = nc_top as i64 + ((board.y + board.height) * scale).round() as i64;
 
         x0 = x0.clamp(0, img_w as i64);
         y0 = y0.clamp(0, img_h as i64);
@@ -254,7 +282,7 @@ mod win {
 
         if x1 <= x0 || y1 <= y0 {
             bail!(
-                "empty board crop after clamp: logical=({:.1},{:.1},{:.1}x{:.1}) scale={scale} image={img_w}x{img_h} phys=({x0},{y0})-({x1},{y1})",
+                "empty board crop after clamp: logical=({:.1},{:.1},{:.1}x{:.1}) scale={scale} nc=({nc_left},{nc_top}) image={img_w}x{img_h} phys=({x0},{y0})-({x1},{y1})",
                 board.x,
                 board.y,
                 board.width,
@@ -265,7 +293,7 @@ mod win {
         let crop_w = (x1 - x0) as u32;
         let crop_h = (y1 - y0) as u32;
         eprintln!(
-            "board crop phys=({x0},{y0})-({x1},{y1}) image={img_w}x{img_h} crop={crop_w}x{crop_h} scale={scale}"
+            "board crop nc=({nc_left},{nc_top}) phys=({x0},{y0})-({x1},{y1}) image={img_w}x{img_h} crop={crop_w}x{crop_h} scale={scale}"
         );
         let cropped = image::imageops::crop_imm(&full, x0 as u32, y0 as u32, crop_w, crop_h)
             .to_image();
