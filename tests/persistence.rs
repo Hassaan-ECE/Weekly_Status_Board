@@ -30,6 +30,21 @@ fn rejects_unknown_version_without_writing() {
     assert!(raw.contains("\"version\":99"));
 }
 
+#[test]
+fn load_normalizes_and_clamps_column_widths() {
+    let dir = tempfile_dir();
+    let path = dir.join("widths.board.json");
+    std::fs::write(
+        &path,
+        r#"{"version":1,"title":"x","theme":"light","zoom":1.0,"column_widths":[2.0,1.0,1.0],"projects":[],"sections":[],"tasks":[]}"#,
+    )
+    .unwrap();
+    let loaded = load_board(&path).unwrap();
+    let sum: f32 = loaded.column_widths.iter().sum();
+    assert!((sum - 1.0).abs() < 1e-5);
+    assert!(loaded.column_widths.iter().all(|x| *x >= 0.18 - 1e-5));
+}
+
 fn tempfile_dir() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("wsb-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();

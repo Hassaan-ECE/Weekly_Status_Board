@@ -24,6 +24,8 @@ pub fn load_board(path: &Path) -> Result<BoardDocument> {
             path.display()
         );
     }
+    let mut board = board;
+    board.set_column_widths(board.column_widths);
     Ok(board)
 }
 
