@@ -9,6 +9,7 @@ use crate::persistence::{
 use crate::theme;
 use crate::ui::dialogs;
 use crate::ui::input::{self, TextInput};
+use crate::ui::board::BoundsSlot;
 use crate::ui::{board, footer, header};
 use crate::zoom::{clamp_zoom, step_zoom};
 use chrono::NaiveDate;
@@ -97,7 +98,9 @@ pub struct StatusApp {
     pub editing: Editing,
     pub selection: Selection,
     pub input: Entity<TextInput>,
+    header_bounds: Option<Bounds<Pixels>>,
     board_bounds: Option<Bounds<Pixels>>,
+    footer_bounds: Option<Bounds<Pixels>>,
     resizing_gutter: Option<usize>,
     focus_handle: FocusHandle,
 }
@@ -130,7 +133,9 @@ impl StatusApp {
             editing: Editing::None,
             selection: Selection::None,
             input,
+            header_bounds: None,
             board_bounds: None,
+            footer_bounds: None,
             resizing_gutter: None,
             focus_handle: cx.focus_handle(),
         }
@@ -141,15 +146,44 @@ impl StatusApp {
     }
 
     fn board_rect(&self) -> Option<BoardRect> {
-        let bounds = self.board_bounds?;
-        let width = f32::from(bounds.size.width);
-        let height = f32::from(bounds.size.height);
-        if width <= 0.0 || height <= 0.0 {
+        let board = self.board_bounds?;
+        let x = f32::from(board.origin.x);
+        let board_y = f32::from(board.origin.y);
+        let width = f32::from(board.size.width);
+        let board_h = f32::from(board.size.height);
+        if width <= 0.0 || board_h <= 0.0 {
+            return None;
+        }
+
+        // ZoomRem origin.y can be 0 / parent-relative; prefer header/footer edges.
+        let header_bottom = self
+            .header_bounds
+            .map(|h| f32::from(h.origin.y) + f32::from(h.size.height))
+            .unwrap_or(56.0);
+        let y = if board_y > header_bottom - 1.0 {
+            board_y
+        } else {
+            header_bottom
+        };
+
+        let board_bottom = y + board_h;
+        let footer_top = self
+            .footer_bounds
+            .map(|f| f32::from(f.origin.y))
+            .unwrap_or(board_bottom - 36.0);
+        let bottom = if board_bottom < footer_top {
+            board_bottom
+        } else {
+            footer_top
+        };
+
+        let height = bottom - y;
+        if height <= 0.0 {
             return None;
         }
         Some(BoardRect {
-            x: f32::from(bounds.origin.x),
-            y: f32::from(bounds.origin.y),
+            x,
+            y,
             width,
             height,
         })
@@ -217,14 +251,36 @@ impl StatusApp {
             }
             (BoardCaptureKind::Proof, Ok(bytes)) => {
                 let path = PathBuf::from("board-export-proof.png");
+                let scale = window.scale_factor();
                 if let Some(board) = self.board_rect() {
+                    let x0 = (board.x * scale).round() as i64;
+                    let y0 = (board.y * scale).round() as i64;
+                    let x1 = ((board.x + board.width) * scale).round() as i64;
+                    let y1 = ((board.y + board.height) * scale).round() as i64;
                     eprintln!(
-                        "WSB_EXPORT_PROOF bounds logical=({:.1},{:.1},{:.1}x{:.1}) scale={}",
+                        "WSB_EXPORT_PROOF logical=({:.1},{:.1},{:.1}x{:.1}) scale={scale} phys_crop=({x0},{y0})-({x1},{y1}) header={:?} board={:?} footer={:?}",
                         board.x,
                         board.y,
                         board.width,
                         board.height,
-                        window.scale_factor()
+                        self.header_bounds.map(|b| {
+                            (
+                                f32::from(b.origin.y),
+                                f32::from(b.size.height),
+                            )
+                        }),
+                        self.board_bounds.map(|b| {
+                            (
+                                f32::from(b.origin.y),
+                                f32::from(b.size.height),
+                            )
+                        }),
+                        self.footer_bounds.map(|b| {
+                            (
+                                f32::from(b.origin.y),
+                                f32::from(b.size.height),
+                            )
+                        }),
                     );
                 }
                 match export::write_png_file(&path, &bytes) {
@@ -588,8 +644,12 @@ impl StatusApp {
         self.reset_zoom(cx);
     }
 
-    pub fn set_board_bounds(&mut self, bounds: Bounds<Pixels>) {
-        self.board_bounds = Some(bounds);
+    pub fn set_region_bounds(&mut self, slot: BoundsSlot, bounds: Bounds<Pixels>) {
+        match slot {
+            BoundsSlot::Header => self.header_bounds = Some(bounds),
+            BoundsSlot::Board => self.board_bounds = Some(bounds),
+            BoundsSlot::Footer => self.footer_bounds = Some(bounds),
+        }
     }
 
     pub fn begin_column_resize(
@@ -1037,7 +1097,11 @@ impl Render for StatusApp {
             .on_action(cx.listener(Self::on_undo))
             .on_action(cx.listener(Self::on_redo))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_click_away))
-            .child(header::Header(&theme, zoom_label, view_mode, app.clone()))
+            .child(board::RecordBounds::new(
+                BoundsSlot::Header,
+                app.clone(),
+                header::Header(&theme, zoom_label, view_mode, app.clone()),
+            ))
             .child(board::Board(
                 &self.board,
                 &theme,
@@ -1046,8 +1110,12 @@ impl Render for StatusApp {
                 &editing,
                 &selection,
                 input,
-                app,
+                app.clone(),
             ))
-            .child(footer::Footer(&theme, status))
+            .child(board::RecordBounds::new(
+                BoundsSlot::Footer,
+                app,
+                footer::Footer(&theme, status),
+            ))
     }
 }

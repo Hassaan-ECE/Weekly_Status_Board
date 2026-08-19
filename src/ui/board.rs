@@ -10,6 +10,92 @@ use gpui::{
     MouseUpEvent, Pixels, Window,
 };
 
+#[derive(Clone, Copy)]
+pub enum BoundsSlot {
+    Header,
+    Board,
+    Footer,
+}
+
+/// Records window layout bounds onto StatusApp during prepaint.
+pub struct RecordBounds {
+    slot: BoundsSlot,
+    app: Entity<StatusApp>,
+    child: Option<AnyElement>,
+}
+
+impl RecordBounds {
+    pub fn new(slot: BoundsSlot, app: Entity<StatusApp>, child: impl IntoElement) -> Self {
+        Self {
+            slot,
+            app,
+            child: Some(child.into_any_element()),
+        }
+    }
+}
+
+impl IntoElement for RecordBounds {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for RecordBounds {
+    type RequestLayoutState = AnyElement;
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut child = self.child.take().expect("RecordBounds child");
+        let layout_id = child.request_layout(window, cx);
+        (layout_id, child)
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        child: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let slot = self.slot;
+        self.app.update(cx, |app, _| {
+            app.set_region_bounds(slot, bounds);
+        });
+        child.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        child: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        child.paint(window, cx);
+    }
+}
+
 struct ZoomRem {
     zoom: f32,
     app: Entity<StatusApp>,
@@ -59,7 +145,7 @@ impl Element for ZoomRem {
         cx: &mut App,
     ) {
         self.app.update(cx, |app, _| {
-            app.set_board_bounds(bounds);
+            app.set_region_bounds(BoundsSlot::Board, bounds);
         });
         let rem = px(16.0 * self.zoom);
         window.with_rem_size(Some(rem), |window| {

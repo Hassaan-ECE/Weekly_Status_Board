@@ -264,6 +264,9 @@ mod win {
 
         let crop_w = (x1 - x0) as u32;
         let crop_h = (y1 - y0) as u32;
+        eprintln!(
+            "board crop phys=({x0},{y0})-({x1},{y1}) image={img_w}x{img_h} crop={crop_w}x{crop_h} scale={scale}"
+        );
         let cropped = image::imageops::crop_imm(&full, x0 as u32, y0 as u32, crop_w, crop_h)
             .to_image();
 
