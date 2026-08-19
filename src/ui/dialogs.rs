@@ -17,6 +17,22 @@ pub fn confirm_delete_section(
     async move { rx.await.map_err(|_| ()) }
 }
 
+/// Confirm clearing all Done tasks after the weekly meeting.
+/// Resolves to `Ok(1)` when the user chooses Clear (index 1); `Ok(0)` for Cancel.
+pub fn confirm_clear_done(
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> impl std::future::Future<Output = Result<usize, ()>> {
+    let rx = window.prompt(
+        PromptLevel::Warning,
+        "Clear all Done tasks? This cannot be undone after you quit.",
+        None,
+        &["Cancel", "Clear"],
+        cx,
+    );
+    async move { rx.await.map_err(|_| ()) }
+}
+
 /// Open a board file.
 ///
 /// gpui 0.2.2 `PathPromptOptions` has no file-type filter, so any file can be chosen.

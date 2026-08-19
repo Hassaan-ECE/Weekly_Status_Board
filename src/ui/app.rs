@@ -28,7 +28,9 @@ actions!(
         ZoomIn,
         ZoomOut,
         ResetZoom,
-        SaveAs
+        SaveAs,
+        Undo,
+        Redo
     ]
 );
 
@@ -133,6 +135,8 @@ impl StatusApp {
             KeyBinding::new("ctrl-=", ZoomIn, Some("StatusApp")),
             KeyBinding::new("ctrl-0", ResetZoom, Some("StatusApp")),
             KeyBinding::new("ctrl-shift-s", SaveAs, Some("StatusApp")),
+            KeyBinding::new("ctrl-z", Undo, Some("StatusApp")),
+            KeyBinding::new("ctrl-y", Redo, Some("StatusApp")),
         ]);
     }
 
@@ -323,6 +327,43 @@ impl StatusApp {
 
     fn on_save_as(&mut self, _: &SaveAs, _: &mut Window, cx: &mut Context<Self>) {
         self.save_as(cx, false);
+    }
+
+    pub fn clear_done_after_meeting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = dialogs::confirm_clear_done(window, cx);
+        cx.spawn(async move |this, cx| {
+            if answer.await.ok() != Some(1) {
+                return;
+            }
+            this.update(cx, |app, cx| {
+                app.board.clear_done();
+                app.history.push(app.board.clone());
+                app.persist_now();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn on_undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(prev) = self.history.undo(self.board.clone()) else {
+            return;
+        };
+        self.board = prev;
+        self.editing = Editing::None;
+        self.persist_now();
+        cx.notify();
+    }
+
+    fn on_redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(next) = self.history.redo(self.board.clone()) else {
+            return;
+        };
+        self.board = next;
+        self.editing = Editing::None;
+        self.persist_now();
+        cx.notify();
     }
 
     pub fn toggle_view_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -811,6 +852,8 @@ impl Render for StatusApp {
             .on_action(cx.listener(Self::on_zoom_out))
             .on_action(cx.listener(Self::on_reset_zoom))
             .on_action(cx.listener(Self::on_save_as))
+            .on_action(cx.listener(Self::on_undo))
+            .on_action(cx.listener(Self::on_redo))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_click_away))
             .child(header::Header(&theme, zoom_label, view_mode, app.clone()))
             .child(board::Board(

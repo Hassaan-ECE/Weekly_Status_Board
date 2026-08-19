@@ -55,6 +55,7 @@ fn primary_button(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
     theme: &Theme,
+    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
     div()
         .id(id.into())
@@ -68,7 +69,7 @@ fn primary_button(
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
         .child(label.into())
-        .on_click(|_, _, _| {})
+        .on_click(on_click)
 }
 
 #[allow(non_snake_case)]
@@ -85,6 +86,7 @@ pub fn Header(
     let app_zoom_out = app.clone();
     let app_zoom_in = app.clone();
     let app_zoom_reset = app.clone();
+    let app_meeting = app.clone();
 
     div()
         .id("app-header")
@@ -187,6 +189,11 @@ pub fn Header(
                     "btn-meeting",
                     "Attended weekly meeting",
                     theme,
+                    move |_, window, cx| {
+                        app_meeting.update(cx, |app, cx| {
+                            app.clear_done_after_meeting(window, cx);
+                        });
+                    },
                 )),
         )
 }
