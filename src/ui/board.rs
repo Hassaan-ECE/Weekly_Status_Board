@@ -1,49 +1,43 @@
+use crate::model::{BoardDocument, Column as ModelColumn};
 use crate::theme::Theme;
-use gpui::{div, prelude::*, px, FontWeight, Rgba};
-
-fn column_header(label: &'static str, color: Rgba, theme: &Theme) -> impl IntoElement {
-    div()
-        .flex_1()
-        .px_3()
-        .py_2()
-        .rounded(px(8.))
-        .bg(color)
-        .text_color(theme.header_fg)
-        .font_weight(FontWeight::MEDIUM)
-        .child(label)
-}
+use crate::ui::column::Column;
+use chrono::NaiveDate;
+use gpui::{div, prelude::*, px};
 
 #[allow(non_snake_case)]
-pub fn Board(theme: &Theme) -> impl IntoElement {
+pub fn Board(board: &BoardDocument, theme: &Theme, today: NaiveDate) -> impl IntoElement {
+    let widths = board.column_widths;
+
     div()
         .id("board-workspace")
         .flex()
-        .flex_col()
+        .flex_row()
         .flex_1()
         .w_full()
         .min_h_0()
         .px_3()
         .py_2()
-        .gap_2()
+        .gap(px(6.))
         .bg(theme.background)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .w_full()
-                .gap_1()
-                .flex_none()
-                .child(column_header("Target", theme.target_header, theme))
-                .child(column_header("In Progress", theme.progress_header, theme))
-                .child(column_header("Done", theme.done_header, theme)),
-        )
-        .child(
-            div()
-                .flex_1()
-                .w_full()
-                .rounded(px(8.))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.fill_4),
-        )
+        .child(Column(
+            board,
+            theme,
+            today,
+            ModelColumn::Target,
+            widths[0],
+        ))
+        .child(Column(
+            board,
+            theme,
+            today,
+            ModelColumn::InProgress,
+            widths[1],
+        ))
+        .child(Column(
+            board,
+            theme,
+            today,
+            ModelColumn::Done,
+            widths[2],
+        ))
 }
