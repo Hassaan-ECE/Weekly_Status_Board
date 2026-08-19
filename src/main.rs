@@ -3,6 +3,7 @@ use weekly_status_board::ui::app::StatusApp;
 
 fn main() {
     Application::new().run(|cx: &mut App| {
+        StatusApp::bind_edit_keys(cx);
         let bounds = Bounds::centered(None, size(px(1100.), px(700.)), cx);
         cx.open_window(
             WindowOptions {
@@ -14,7 +15,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| StatusApp::new()),
+            |_, cx| cx.new(|cx| StatusApp::new(cx)),
         )
         .unwrap();
         cx.activate(true);

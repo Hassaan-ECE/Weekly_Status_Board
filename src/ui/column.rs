@@ -1,8 +1,10 @@
 use crate::model::{BoardDocument, Column as ModelColumn, ThemeMode};
 use crate::theme::Theme;
+use crate::ui::app::{Editing, StatusApp};
 use crate::ui::card::Card;
+use crate::ui::input::TextInput;
 use chrono::NaiveDate;
-use gpui::{div, prelude::*, px, relative, rgb, FontWeight, Rgba, SharedString};
+use gpui::{div, prelude::*, px, relative, rgb, Entity, FontWeight, Rgba, SharedString};
 
 fn column_title(column: ModelColumn) -> &'static str {
     match column {
@@ -34,11 +36,20 @@ fn project_section(
     project_id: &str,
     project_name: &str,
     column: ModelColumn,
+    view_mode: bool,
+    editing: &Editing,
+    input: Entity<TextInput>,
+    app: Entity<StatusApp>,
 ) -> impl IntoElement {
     let header_id: SharedString = format!("project-{}-{}", project_id, column.index()).into();
-    let name: SharedString = project_name.to_string().into();
     let project_fg = project_header_fg(board, theme);
     let tasks = board.tasks_in(project_id, column);
+    let editing_name = matches!(
+        editing,
+        Editing::ProjectName { id, column: edit_col }
+            if id == project_id && *edit_col == column
+    );
+    let pid = project_id.to_string();
 
     let mut cards = div()
         .id(SharedString::from(format!(
@@ -54,7 +65,88 @@ fn project_section(
         .pb_2();
 
     for task in tasks {
-        cards = cards.child(Card(task, theme, today));
+        cards = cards.child(Card(
+            task,
+            theme,
+            today,
+            view_mode,
+            editing,
+            input.clone(),
+            app.clone(),
+        ));
+    }
+
+    let name_el = if editing_name {
+        div()
+            .id(SharedString::from(format!(
+                "edit-project-{}",
+                project_id
+            )))
+            .flex_1()
+            .min_w_0()
+            .child(input)
+            .into_any_element()
+    } else {
+        let app_name = app.clone();
+        let pid_name = pid.clone();
+        let name: SharedString = project_name.to_string().into();
+        div()
+            .id(SharedString::from(format!(
+                "project-name-{}",
+                project_id
+            )))
+            .flex_1()
+            .min_w_0()
+            .cursor_pointer()
+            .child(name)
+            .when(!view_mode, |el| {
+                el.on_click(move |_, window, cx| {
+                    app_name.update(cx, |app, cx| {
+                        app.start_edit_project_name(&pid_name, column, window, cx);
+                    });
+                })
+            })
+            .into_any_element()
+    };
+
+    let mut header = div()
+        .id(header_id)
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py_1()
+        .bg(theme.fill_4)
+        .text_color(project_fg)
+        .font_weight(FontWeight::BOLD)
+        .text_size(px(12.))
+        .child(name_el);
+
+    if !view_mode {
+        let app_add = app.clone();
+        let pid_add = pid.clone();
+        header = header.child(
+            div()
+                .id(SharedString::from(format!(
+                    "add-task-{}-{}",
+                    project_id,
+                    column.index()
+                )))
+                .flex_none()
+                .px_1p5()
+                .py_0p5()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.border))
+                .child("+")
+                .on_click(move |_, window, cx| {
+                    app_add.update(cx, |app, cx| {
+                        app.add_task_at(&pid_add, column, window, cx);
+                    });
+                }),
+        );
     }
 
     div()
@@ -67,18 +159,7 @@ fn project_section(
         .flex_col()
         .w_full()
         .gap_1()
-        .child(
-            div()
-                .id(header_id)
-                .w_full()
-                .px_2()
-                .py_1()
-                .bg(theme.fill_4)
-                .text_color(project_fg)
-                .font_weight(FontWeight::BOLD)
-                .text_size(px(12.))
-                .child(name),
-        )
+        .child(header)
         .child(cards)
 }
 
@@ -89,6 +170,10 @@ pub fn Column(
     today: NaiveDate,
     column: ModelColumn,
     width: f32,
+    view_mode: bool,
+    editing: &Editing,
+    input: Entity<TextInput>,
+    app: Entity<StatusApp>,
 ) -> impl IntoElement {
     let header_color = column_header_color(column, theme);
     let title = column_title(column);
@@ -114,8 +199,41 @@ pub fn Column(
                 &project.id,
                 &project.name,
                 column,
+                view_mode,
+                editing,
+                input.clone(),
+                app.clone(),
             ));
         }
+    }
+
+    if !view_mode {
+        let app_proj = app.clone();
+        body = body.child(
+            div()
+                .id(SharedString::from(format!(
+                    "add-project-{}",
+                    column.index()
+                )))
+                .w_full()
+                .mt_1()
+                .px_2()
+                .py_2()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme.border)
+                .border_dashed()
+                .text_color(theme.muted)
+                .text_sm()
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.fill_4))
+                .child("+ Add project")
+                .on_click(move |_, window, cx| {
+                    app_proj.update(cx, |app, cx| {
+                        app.add_project_at(column, window, cx);
+                    });
+                }),
+        );
     }
 
     div()

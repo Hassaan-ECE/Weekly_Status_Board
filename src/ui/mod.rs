@@ -4,3 +4,4 @@ pub mod card;
 pub mod column;
 pub mod footer;
 pub mod header;
+pub mod input;

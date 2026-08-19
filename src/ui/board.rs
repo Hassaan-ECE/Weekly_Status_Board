@@ -1,11 +1,21 @@
 use crate::model::{BoardDocument, Column as ModelColumn};
 use crate::theme::Theme;
+use crate::ui::app::{Editing, StatusApp};
 use crate::ui::column::Column;
+use crate::ui::input::TextInput;
 use chrono::NaiveDate;
-use gpui::{div, prelude::*, px};
+use gpui::{div, prelude::*, px, Entity};
 
 #[allow(non_snake_case)]
-pub fn Board(board: &BoardDocument, theme: &Theme, today: NaiveDate) -> impl IntoElement {
+pub fn Board(
+    board: &BoardDocument,
+    theme: &Theme,
+    today: NaiveDate,
+    view_mode: bool,
+    editing: &Editing,
+    input: Entity<TextInput>,
+    app: Entity<StatusApp>,
+) -> impl IntoElement {
     let widths = board.column_widths;
 
     div()
@@ -25,6 +35,10 @@ pub fn Board(board: &BoardDocument, theme: &Theme, today: NaiveDate) -> impl Int
             today,
             ModelColumn::Target,
             widths[0],
+            view_mode,
+            editing,
+            input.clone(),
+            app.clone(),
         ))
         .child(Column(
             board,
@@ -32,6 +46,10 @@ pub fn Board(board: &BoardDocument, theme: &Theme, today: NaiveDate) -> impl Int
             today,
             ModelColumn::InProgress,
             widths[1],
+            view_mode,
+            editing,
+            input.clone(),
+            app.clone(),
         ))
         .child(Column(
             board,
@@ -39,5 +57,9 @@ pub fn Board(board: &BoardDocument, theme: &Theme, today: NaiveDate) -> impl Int
             today,
             ModelColumn::Done,
             widths[2],
+            view_mode,
+            editing,
+            input,
+            app,
         ))
 }
