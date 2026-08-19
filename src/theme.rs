@@ -1,3 +1,4 @@
+use crate::model::ThemeMode;
 use gpui::{rgb, Rgba};
 
 #[derive(Clone, Copy)]
@@ -70,10 +71,9 @@ pub fn dark() -> Theme {
     }
 }
 
-pub fn for_mode(dark_mode: bool) -> Theme {
-    if dark_mode {
-        dark()
-    } else {
-        light()
+pub fn for_mode(mode: ThemeMode) -> Theme {
+    match mode {
+        ThemeMode::Dark => dark(),
+        ThemeMode::Light => light(),
     }
 }

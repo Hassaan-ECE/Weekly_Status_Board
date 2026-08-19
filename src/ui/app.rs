@@ -1,7 +1,7 @@
 use crate::dates::{apply_date_roll, display_date, parse_date};
 use crate::export::{self, BoardRect};
 use crate::history::History;
-use crate::model::{BoardDocument, Column};
+use crate::model::{BoardDocument, Column, ThemeMode};
 use crate::persistence::{
     draft_path, ensure_board_json_suffix, load_board, load_startup_board, save_board, save_session,
     Session,
@@ -120,6 +120,7 @@ impl StatusApp {
             }
         }
         let history = History::new(board.clone());
+        let theme_dark = matches!(board.theme, ThemeMode::Dark);
         let input = cx.new(|cx| TextInput::new(cx, "", ""));
         Self {
             board,
@@ -129,7 +130,7 @@ impl StatusApp {
             exporting_clean: false,
             export_proof_scheduled: false,
             status,
-            theme_dark: false,
+            theme_dark,
             editing: Editing::None,
             selection: Selection::None,
             input,
@@ -400,6 +401,20 @@ impl StatusApp {
         }
     }
 
+    fn sync_theme_dark(&mut self) {
+        self.theme_dark = matches!(self.board.theme, ThemeMode::Dark);
+    }
+
+    pub fn toggle_theme(&mut self, cx: &mut Context<Self>) {
+        self.board.theme = match self.board.theme {
+            ThemeMode::Light => ThemeMode::Dark,
+            ThemeMode::Dark => ThemeMode::Light,
+        };
+        self.sync_theme_dark();
+        self.persist_now();
+        cx.notify();
+    }
+
     fn save_dir(&self) -> PathBuf {
         if let Some(path) = &self.active_path {
             if let Some(parent) = path.parent() {
@@ -436,6 +451,7 @@ impl StatusApp {
     fn reset_to_empty_unnamed(&mut self, cx: &mut Context<Self>) {
         self.board = BoardDocument::empty();
         self.history = History::new(self.board.clone());
+        self.sync_theme_dark();
         self.editing = Editing::None;
         self.selection = Selection::None;
         self.clear_active_path_session();
@@ -459,6 +475,7 @@ impl StatusApp {
         }
         self.board = board;
         self.history = History::new(self.board.clone());
+        self.sync_theme_dark();
         self.editing = Editing::None;
         self.selection = Selection::None;
         self.remember_active_path(path);
@@ -472,6 +489,7 @@ impl StatusApp {
                 self.status = format!("{err:#}");
                 self.board = BoardDocument::empty();
                 self.history = History::new(self.board.clone());
+                self.sync_theme_dark();
                 self.editing = Editing::None;
                 self.selection = Selection::None;
                 self.active_path = None;
@@ -587,6 +605,7 @@ impl StatusApp {
             return;
         };
         self.board = prev;
+        self.sync_theme_dark();
         self.editing = Editing::None;
         self.persist_now();
         cx.notify();
@@ -597,6 +616,7 @@ impl StatusApp {
             return;
         };
         self.board = next;
+        self.sync_theme_dark();
         self.editing = Editing::None;
         self.persist_now();
         cx.notify();
@@ -1063,7 +1083,7 @@ impl Render for StatusApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title("Weekly Status Board");
         self.schedule_export_proof_if_requested(window, cx);
-        let theme = theme::for_mode(self.theme_dark);
+        let theme = theme::for_mode(self.board.theme);
         let status: SharedString = self.status.clone().into();
         let zoom_label = self.zoom_label();
         let today = Self::today();
@@ -1072,6 +1092,7 @@ impl Render for StatusApp {
         let editing = self.editing.clone();
         let selection = self.selection.clone();
         let view_mode = self.view_mode;
+        let theme_dark = self.theme_dark;
         let board_view_look = self.board_view_look();
 
         div()
@@ -1100,7 +1121,7 @@ impl Render for StatusApp {
             .child(board::RecordBounds::new(
                 BoundsSlot::Header,
                 app.clone(),
-                header::Header(&theme, zoom_label, view_mode, app.clone()),
+                header::Header(&theme, zoom_label, view_mode, theme_dark, app.clone()),
             ))
             .child(board::Board(
                 &self.board,

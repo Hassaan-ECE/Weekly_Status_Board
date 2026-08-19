@@ -77,6 +77,7 @@ pub fn Header(
     theme: &Theme,
     zoom_label: SharedString,
     view_mode: bool,
+    theme_dark: bool,
     app: Entity<StatusApp>,
 ) -> impl IntoElement {
     let app_new = app.clone();
@@ -85,10 +86,16 @@ pub fn Header(
     let app_copy = app.clone();
     let app_export = app.clone();
     let app_view = app.clone();
+    let app_theme = app.clone();
     let app_zoom_out = app.clone();
     let app_zoom_in = app.clone();
     let app_zoom_reset = app.clone();
     let app_meeting = app.clone();
+    let theme_label = if theme_dark {
+        "Light Theme"
+    } else {
+        "Dark Theme"
+    };
 
     div()
         .id("app-header")
@@ -164,7 +171,16 @@ pub fn Header(
                         });
                     },
                 ))
-                .child(quiet_button("btn-theme", "Dark Theme", theme, |_, _, _| {}))
+                .child(quiet_button(
+                    "btn-theme",
+                    theme_label,
+                    theme,
+                    move |_, _, cx| {
+                        app_theme.update(cx, |app, cx| {
+                            app.toggle_theme(cx);
+                        });
+                    },
+                ))
                 .child(
                     div()
                         .id("zoom-group")

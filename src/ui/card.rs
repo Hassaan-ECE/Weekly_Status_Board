@@ -4,7 +4,7 @@ use crate::theme::Theme;
 use crate::ui::app::{DragTask, Editing, Selection, StatusApp};
 use crate::ui::input::TextInput;
 use chrono::NaiveDate;
-use gpui::{div, prelude::*, px, rgb, Entity, FontWeight, MouseButton, SharedString};
+use gpui::{div, prelude::*, px, Entity, FontWeight, MouseButton, SharedString};
 
 #[allow(non_snake_case)]
 pub fn Card(
@@ -83,7 +83,7 @@ pub fn Card(
             .bg(theme.fill_4)
             .font_weight(FontWeight::BOLD)
             .text_xs()
-            .text_color(rgb(0x111111))
+            .text_color(theme.foreground)
             .cursor_pointer()
             .child(date)
             .when(!view_mode, |el| {
