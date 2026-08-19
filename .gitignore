@@ -4,3 +4,7 @@
 .idea/
 .vscode/
 *.pdb
+.worktrees/
+capture-proof.png
+*.png
+!docs/**/*.png
