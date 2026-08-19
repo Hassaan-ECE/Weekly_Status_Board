@@ -2,6 +2,7 @@ use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, Context, SharedString, Window,
     WindowBounds, WindowOptions,
 };
+use std::path::PathBuf;
 
 struct HelloWorld {
     text: SharedString,
@@ -11,14 +12,42 @@ impl Render for HelloWorld {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title("Weekly Status Board");
         div()
+            .id("root-capture")
             .flex()
             .flex_col()
             .bg(rgb(0xffffff))
             .size_full()
             .justify_center()
             .items_center()
+            .gap_4()
             .text_color(rgb(0x262626))
+            .cursor_pointer()
+            .on_click(|_event, window, _cx| {
+                let path = PathBuf::from("capture-proof.png");
+                match weekly_status_board::export::capture_window_png(window, 1) {
+                    Ok(bytes) => match weekly_status_board::export::write_png_file(&path, &bytes) {
+                        Ok(()) => {
+                            let abs = std::env::current_dir()
+                                .map(|cwd| cwd.join(&path))
+                                .unwrap_or_else(|_| path.clone());
+                            eprintln!("wrote PNG {} ({} bytes)", abs.display(), bytes.len());
+                        }
+                        Err(err) => eprintln!("write PNG failed: {err:#}"),
+                    },
+                    Err(err) => eprintln!("capture PNG failed: {err:#}"),
+                }
+            })
             .child(format!("Weekly Status Board — {}", &self.text))
+            .child(
+                div()
+                    .id("save-png")
+                    .px_4()
+                    .py_2()
+                    .bg(rgb(0x2563eb))
+                    .text_color(rgb(0xffffff))
+                    .rounded_md()
+                    .child("Save PNG"),
+            )
     }
 }
 
