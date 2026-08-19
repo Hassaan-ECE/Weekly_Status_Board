@@ -125,10 +125,10 @@ impl StatusApp {
         cx.bind_keys([
             KeyBinding::new("enter", CommitEdit, Some("TextInput")),
             KeyBinding::new("escape", CancelEdit, Some("TextInput")),
-            KeyBinding::new("delete", DeleteSelected, None),
-            KeyBinding::new("backspace", DeleteSelected, None),
-            KeyBinding::new("[", MoveSelectedLeft, None),
-            KeyBinding::new("]", MoveSelectedRight, None),
+            KeyBinding::new("delete", DeleteSelected, Some("StatusApp")),
+            KeyBinding::new("backspace", DeleteSelected, Some("StatusApp")),
+            KeyBinding::new("[", MoveSelectedLeft, Some("StatusApp")),
+            KeyBinding::new("]", MoveSelectedRight, Some("StatusApp")),
         ]);
     }
 
@@ -316,7 +316,13 @@ impl StatusApp {
         dest_project_id: &str,
         cx: &mut Context<Self>,
     ) {
-        if self.view_mode {
+        if self.view_mode || !matches!(self.editing, Editing::None) {
+            return;
+        }
+        let Some(task) = self.board.task(task_id) else {
+            return;
+        };
+        if task.column == dest_column && task.project_id == dest_project_id {
             return;
         }
         self.board
@@ -492,6 +498,7 @@ impl Render for StatusApp {
 
         div()
             .id("status-app-root")
+            .key_context("StatusApp")
             .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
