@@ -1,13 +1,15 @@
 # Weekly Status Board Design
 
 **Date:** 2026-08-19  
-**Status:** Draft for user review  
+**Status:** Approved  
 **Product:** Weekly Status Board  
 **Location:** `C:\Projects\Active\Weekly_Status_Board`
 
 ## Summary
 
 A personal Windows desktop app for a standing, project-grouped task board. Syed edits work on this laptop, then pastes a PNG into PowerPoint for the weekly manager update. The UI toolkit is **GPUI** (learning it vs Tauri/egui). Visual chrome follows **Inventory Management**. File/export habits follow **Gantt Chart Creator**.
+
+This repo is also the **GPUI reference** for later apps (the same way Inventory Management is the visual reference). Keep `theme`, window shell, persistence, and PNG export copyable. Do not bury those in board-specific UI.
 
 Cards move Target → In Progress → Done. Due dates on open work never display as late: if a Target or In Progress date is before today, it becomes today. **Attended weekly meeting** clears Done after confirm.
 
@@ -25,6 +27,7 @@ Cards move Target → In Progress → Done. Due dates on open work never display
 - Portable JSON board files with New / Open / Save / Save As and autosave.
 - In-session undo/redo (`Ctrl+Z` / `Ctrl+Y`).
 - Light/dark theme from Inventory tokens. Footer: **Built by Syed Hassaan Shah**.
+- Code layout that a later GPUI app can copy: `theme`, shell, file/PNG helpers, then product UI.
 
 ## Non-goals (v1)
 
