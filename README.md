@@ -4,7 +4,7 @@ Personal Windows desktop board for weekly manager updates. Cards move Target →
 
 Built with **GPUI**. Treat this repo as the GPUI reference for later apps (theme, window shell, JSON files, PNG export). See `AGENTS.md`.
 
-**Status:** implementation in progress on `feat/weekly-status-board` (window, board UI, JSON persistence, View/zoom, meeting clear, Copy/Export PNG, dark theme).
+**Status:** v1 implemented on `feat/weekly-status-board` (not merged to `main`). Run `cargo run` from that worktree. Copy/Export PNG is board-only via PrintWindow (see `AGENTS.md`).
 
 ## Run
 
