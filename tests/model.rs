@@ -6,7 +6,7 @@ fn day(y: i32, m: u32, d: u32) -> NaiveDate {
 }
 
 #[test]
-fn move_creates_destination_section_and_keeps_empty_source() {
+fn move_creates_destination_section_and_drops_empty_source() {
     let mut board = BoardDocument::empty();
     let (project_id, task_id) = board.add_project(Column::Target);
     board.set_task_title(&task_id, "Ventilation");
@@ -14,9 +14,19 @@ fn move_creates_destination_section_and_keeps_empty_source() {
     board.move_task(&task_id, Column::InProgress, &project_id);
 
     assert_eq!(board.task(&task_id).unwrap().column, Column::InProgress);
-    assert!(board.has_section(&project_id, Column::Target));
+    assert!(!board.has_section(&project_id, Column::Target));
     assert!(board.has_section(&project_id, Column::InProgress));
-    assert!(board.tasks_in(&project_id, Column::Target).is_empty());
+}
+
+#[test]
+fn move_keeps_source_section_when_other_tasks_remain() {
+    let mut board = BoardDocument::empty();
+    let (project_id, t1) = board.add_project(Column::Target);
+    let t2 = board.add_task(&project_id, Column::Target);
+    board.move_task(&t1, Column::InProgress, &project_id);
+    assert!(board.has_section(&project_id, Column::Target));
+    assert_eq!(board.tasks_in(&project_id, Column::Target).len(), 1);
+    assert_eq!(board.task(&t2).unwrap().column, Column::Target);
 }
 
 #[test]
@@ -28,7 +38,8 @@ fn drop_on_other_project_reparents() {
     let task = board.task(&task_id).unwrap();
     assert_eq!(task.project_id, b);
     assert_eq!(task.column, Column::InProgress);
-    assert!(board.has_section(&a, Column::Target));
+    assert!(!board.has_section(&a, Column::Target));
+    assert!(!board.projects.iter().any(|p| p.id == a));
 }
 
 #[test]

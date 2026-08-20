@@ -187,11 +187,21 @@ impl BoardDocument {
         let Some(idx) = self.tasks.iter().position(|t| t.id == task_id) else {
             return;
         };
+        let src_project = self.tasks[idx].project_id.clone();
+        let src_column = self.tasks[idx].column;
         self.tasks[idx].column = dest_column;
         self.tasks[idx].project_id = dest_project_id.to_string();
         self.ensure_section(dest_project_id, dest_column);
         let task = self.tasks.remove(idx);
         self.tasks.push(task);
+        let left_source = src_project != dest_project_id || src_column != dest_column;
+        if left_source && self.tasks_in(&src_project, src_column).is_empty() {
+            self.sections
+                .retain(|s| !(s.project_id == src_project && s.column == src_column));
+            if !self.sections.iter().any(|s| s.project_id == src_project) {
+                self.projects.retain(|p| p.id != src_project);
+            }
+        }
     }
 
     pub fn move_task_side(&mut self, task_id: &str, dest: Column) {

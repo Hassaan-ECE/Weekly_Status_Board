@@ -27,7 +27,6 @@ pub fn Card(
     let task_id = task.id.clone();
     let project_id = task.project_id.clone();
     let task_title = task.title.clone();
-    let task_column = task.column;
     let selected = matches!(selection, Selection::Card { id } if id == &task.id);
     let editing_title = matches!(editing, Editing::TaskTitle { id } if id == &task.id);
     let editing_due = matches!(editing, Editing::TaskDue { id } if id == &task.id);
@@ -142,46 +141,6 @@ pub fn Card(
                     });
                 }),
         );
-        if let Some(dest) = task_column.left() {
-            let app_left = app.clone();
-            card = card.child(
-                div()
-                    .id(SharedString::from(format!("move-left-{}", task_id)))
-                    .flex_none()
-                    .px_1()
-                    .py_0p5()
-                    .rounded(px(4.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.fill_4))
-                    .text_xs()
-                    .child("[")
-                    .on_click(move |_, _, cx| {
-                        app_left.update(cx, |app, cx| {
-                            app.move_selected_side(dest, cx);
-                        });
-                    }),
-            );
-        }
-        if let Some(dest) = task_column.right() {
-            let app_right = app.clone();
-            card = card.child(
-                div()
-                    .id(SharedString::from(format!("move-right-{}", task_id)))
-                    .flex_none()
-                    .px_1()
-                    .py_0p5()
-                    .rounded(px(4.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.fill_4))
-                    .text_xs()
-                    .child("]")
-                    .on_click(move |_, _, cx| {
-                        app_right.update(cx, |app, cx| {
-                            app.move_selected_side(dest, cx);
-                        });
-                    }),
-            );
-        }
     }
 
     if !view_mode {
