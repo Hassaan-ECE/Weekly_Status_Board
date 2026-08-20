@@ -14,8 +14,8 @@ use crate::ui::{board, footer, header};
 use crate::zoom::{clamp_zoom, step_zoom};
 use chrono::NaiveDate;
 use gpui::{
-    actions, div, prelude::*, px, rgb, Bounds, ClipboardItem, Context, Entity, FocusHandle,
-    Focusable, FontWeight, Image, ImageFormat, KeyBinding, MouseButton, MouseDownEvent, Pixels,
+    actions, div, prelude::*, px, rgb, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
+    KeyBinding, MouseButton, MouseDownEvent, Pixels,
     Point, ScrollWheelEvent, SharedString, Window,
 };
 use std::path::PathBuf;
@@ -242,9 +242,10 @@ impl StatusApp {
 
         match (kind, capture) {
             (BoardCaptureKind::Copy, Ok(bytes)) => {
-                let image = Image::from_bytes(ImageFormat::Png, bytes);
-                cx.write_to_clipboard(ClipboardItem::new_image(&image));
-                self.status = "Copied board image".into();
+                match export::copy_png_to_clipboard(window, &bytes) {
+                    Ok(()) => self.status = "Copied board image".into(),
+                    Err(err) => self.status = format!("{err:#}"),
+                }
                 cx.notify();
             }
             (BoardCaptureKind::Export, Ok(bytes)) => {

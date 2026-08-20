@@ -20,7 +20,7 @@ GPUI 0.2.2 has no public window-screenshot API. PNG capture is Win32:
 1. Get HWND via `raw_window_handle::HasWindowHandle` on the GPUI `Window`.
 2. Capture the full window with **PrintWindow(PW_RENDERFULLCONTENT)** — BitBlt is blank on this DComp window.
 3. Crop to the board workspace using GetWindowRect + ClientToScreen titlebar offset (`nc_top` / `nc_left`) plus board bounds × `scale_factor`.
-4. Copy: `gpui::ClipboardItem::new_image` with PNG bytes.
+4. Copy: Win32 clipboard with registered `PNG` **and** `CF_DIB` (PowerPoint/Ctrl+V). GPUI's image clipboard is PNG-only and does not paste in Office.
 5. Export: save dialog + `write_png_file`.
 
 See `src/export.rs` (`capture_board_png`).

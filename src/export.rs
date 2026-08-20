@@ -2,7 +2,8 @@
 //!
 //! GPUI 0.2.2 has no public window-screenshot API. Capture uses Win32
 //! PrintWindow(PW_RENDERFULLCONTENT) via HWND from `HasWindowHandle` (BitBlt is
-//! blank on this DComp window). Task 17 AGENTS.md should note this path.
+//! blank on this DComp window). Copy puts PNG + CF_DIB on the Windows clipboard
+//! so Ctrl+V works in PowerPoint (GPUI's image clipboard is PNG-only).
 
 use anyhow::{bail, Context, Result};
 use std::io::Cursor;
@@ -316,10 +317,122 @@ mod win {
             .context("encode cropped board PNG")?;
         Ok(out.into_inner())
     }
+
+    /// BITMAPINFOHEADER + bottom-up BGRA pixels (CF_DIB payload).
+    fn png_to_dib(png: &[u8]) -> Result<Vec<u8>> {
+        let img = image::load_from_memory(png)
+            .context("decode PNG for clipboard DIB")?
+            .to_rgba8();
+        let width = img.width() as i32;
+        let height = img.height() as i32;
+        if width <= 0 || height <= 0 {
+            bail!("clipboard image empty: {width}x{height}");
+        }
+        let mut rgba = img.into_raw();
+        for chunk in rgba.chunks_exact_mut(4) {
+            chunk.swap(0, 2); // RGBA -> BGRA
+        }
+        let stride = (width as usize) * 4;
+        let mut bgra = vec![0u8; rgba.len()];
+        for y in 0..height as usize {
+            let src = y * stride;
+            let dst = (height as usize - 1 - y) * stride;
+            bgra[dst..dst + stride].copy_from_slice(&rgba[src..src + stride]);
+        }
+        let header = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            biSizeImage: bgra.len() as u32,
+            ..Default::default()
+        };
+        let mut out = Vec::with_capacity(std::mem::size_of::<BITMAPINFOHEADER>() + bgra.len());
+        out.extend_from_slice(unsafe {
+            std::slice::from_raw_parts(
+                (&header as *const BITMAPINFOHEADER).cast::<u8>(),
+                std::mem::size_of::<BITMAPINFOHEADER>(),
+            )
+        });
+        out.extend_from_slice(&bgra);
+        Ok(out)
+    }
+
+    fn global_from_bytes(bytes: &[u8]) -> Result<windows::Win32::Foundation::HGLOBAL> {
+        use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+        unsafe {
+            let global = GlobalAlloc(GMEM_MOVEABLE, bytes.len())?;
+            let ptr = GlobalLock(global);
+            if ptr.is_null() {
+                bail!("GlobalLock failed");
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast(), bytes.len());
+            let _ = GlobalUnlock(global);
+            Ok(global)
+        }
+    }
+
+    /// Put PNG (for modern apps) and CF_DIB (for PowerPoint / Ctrl+V) on the clipboard.
+    pub fn copy_png_to_clipboard(window: &impl HasWindowHandle, png: &[u8]) -> Result<()> {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::DataExchange::{
+            CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+        };
+        use windows::core::w;
+        const CF_DIB: u32 = 8; // CLIPBOARD_FORMAT CF_DIB
+
+        if png.is_empty() {
+            bail!("clipboard PNG is empty");
+        }
+        let dib = png_to_dib(png)?;
+        let hwnd = hwnd_from_window(window).ok();
+        let mut last_err = None;
+        for attempt in 0..8 {
+            let opened = unsafe { OpenClipboard(hwnd) };
+            match opened {
+                Ok(()) => {
+                    last_err = None;
+                    break;
+                }
+                Err(err) => {
+                    last_err = Some(err);
+                    std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1)));
+                }
+            }
+        }
+        if let Some(err) = last_err {
+            bail!("OpenClipboard failed: {err}");
+        }
+
+        let result = (|| {
+            unsafe {
+                EmptyClipboard().context("EmptyClipboard")?;
+            }
+            let png_global = global_from_bytes(png).context("alloc PNG clipboard buffer")?;
+            let dib_global = global_from_bytes(&dib).context("alloc CF_DIB clipboard buffer")?;
+            let png_format = unsafe { RegisterClipboardFormatW(w!("PNG")) };
+            if png_format == 0 {
+                bail!("RegisterClipboardFormatW(PNG) failed");
+            }
+            unsafe {
+                SetClipboardData(png_format, Some(HANDLE(png_global.0)))
+                    .context("SetClipboardData PNG")?;
+                SetClipboardData(CF_DIB, Some(HANDLE(dib_global.0)))
+                    .context("SetClipboardData CF_DIB")?;
+            }
+            Ok(())
+        })();
+        let _ = unsafe { CloseClipboard() };
+        result
+    }
 }
 
 #[cfg(windows)]
-pub use win::{capture_board_png, capture_window_png, hwnd_from_window, png_from_hwnd};
+pub use win::{
+    capture_board_png, capture_window_png, copy_png_to_clipboard, hwnd_from_window, png_from_hwnd,
+};
 
 #[cfg(not(windows))]
 pub fn capture_window_png<W>(_window: &W, _scale: u32) -> Result<Vec<u8>> {
@@ -333,4 +446,9 @@ pub fn capture_board_png<W>(
     _scale_factor: f32,
 ) -> Result<Vec<u8>> {
     bail!("PNG capture is only implemented on Windows")
+}
+
+#[cfg(not(windows))]
+pub fn copy_png_to_clipboard<W>(_window: &W, _png: &[u8]) -> Result<()> {
+    bail!("clipboard image copy is only implemented on Windows")
 }
