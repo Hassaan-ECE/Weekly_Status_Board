@@ -7,7 +7,7 @@ use chrono::NaiveDate;
 use gpui::{
     div, prelude::*, px, AnyElement, App, Bounds, DispatchPhase, Element, ElementId, Entity,
     GlobalElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Window,
+    MouseUpEvent, Pixels, ScrollWheelEvent, Window,
 };
 
 #[derive(Clone, Copy)]
@@ -165,6 +165,15 @@ impl Element for ZoomRem {
     ) {
         let app_move = self.app.clone();
         let app_up = self.app.clone();
+        let app_zoom = self.app.clone();
+        window.on_mouse_event(move |ev: &ScrollWheelEvent, phase, window, cx| {
+            if phase != DispatchPhase::Capture || !ev.modifiers.control {
+                return;
+            }
+            app_zoom.update(cx, |app, cx| {
+                app.on_scroll_wheel(ev, window, cx);
+            });
+        });
         window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
             if phase != DispatchPhase::Bubble || !ev.dragging() {
                 return;

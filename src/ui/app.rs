@@ -1093,7 +1093,7 @@ impl StatusApp {
         cx.notify();
     }
 
-    fn on_scroll_wheel(
+    pub(crate) fn on_scroll_wheel(
         &mut self,
         event: &ScrollWheelEvent,
         _: &mut Window,
@@ -1103,6 +1103,9 @@ impl StatusApp {
             return;
         }
         let dy = event.delta.pixel_delta(px(16.)).y;
+        if dy == px(0.) {
+            return;
+        }
         let dir = if dy < px(0.) { 1 } else { -1 };
         self.board.zoom = step_zoom(self.board.zoom, dir);
         self.persist_now();
