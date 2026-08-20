@@ -29,7 +29,6 @@ pub fn Card(
     let task_title = task.title.clone();
     let selected = matches!(selection, Selection::Card { id } if id == &task.id);
     let editing_title = matches!(editing, Editing::TaskTitle { id } if id == &task.id);
-    let editing_due = matches!(editing, Editing::TaskDue { id } if id == &task.id);
 
     let title_el = if editing_title {
         div()
@@ -62,42 +61,35 @@ pub fn Card(
             .into_any_element()
     };
 
-    let date_el = if editing_due {
-        div()
-            .id(SharedString::from(format!("edit-due-{}", task.id)))
-            .flex_none()
-            .w(px(72.))
-            .child(input)
-            .into_any_element()
-    } else {
-        let app_due = app.clone();
-        let tid = task_id.clone();
-        div()
-            .id(SharedString::from(format!("due-{}", task.id)))
-            .flex_none()
-            .w(px(46.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .py_0p5()
-            .rounded(px(6.))
-            .bg(theme.fill_4)
-            .font_weight(FontWeight::BOLD)
-            .text_xs()
-            .text_color(theme.foreground)
-            .cursor_pointer()
-            .child(date)
-            .when(!view_mode, |el| {
-                el.on_click(move |event, window, cx| {
-                    if event.click_count() >= 2 {
-                        app_due.update(cx, |app, cx| {
-                            app.start_edit_task_due(&tid, window, cx);
-                        });
-                    }
-                })
-            })
-            .into_any_element()
-    };
+    let app_due = app.clone();
+    let tid = task_id.clone();
+    let date_el = div()
+        .id(SharedString::from(format!("due-{}", task.id)))
+        .flex_none()
+        .w(px(46.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .py_0p5()
+        .rounded(px(6.))
+        .bg(theme.fill_4)
+        .font_weight(FontWeight::BOLD)
+        .text_xs()
+        .text_color(theme.foreground)
+        .cursor_pointer()
+        .child(date)
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            if !view_mode {
+                app_due.update(cx, |app, cx| {
+                    app.open_calendar(&tid, window, cx);
+                });
+            }
+        })
+        .into_any_element();
 
     let mut card = div()
         .id(id)

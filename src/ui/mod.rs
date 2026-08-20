@@ -1,5 +1,6 @@
 pub mod app;
 pub mod board;
+pub mod calendar;
 pub mod card;
 pub mod column;
 pub mod dialogs;

@@ -1,6 +1,7 @@
 pub mod dates;
 pub mod export;
 pub mod history;
+pub mod icon;
 pub mod model;
 pub mod persistence;
 pub mod theme;

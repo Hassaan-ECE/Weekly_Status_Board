@@ -8,3 +8,4 @@
 capture-proof.png
 *.png
 !docs/**/*.png
+!assets/**

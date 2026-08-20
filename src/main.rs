@@ -18,6 +18,7 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
+                weekly_status_board::icon::apply_window_icon(window);
                 cx.new(|cx| {
                     let app = StatusApp::new(cx);
                     app.focus_handle(cx).focus(window);

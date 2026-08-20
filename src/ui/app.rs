@@ -1,4 +1,4 @@
-use crate::dates::{apply_date_roll, display_date, parse_date};
+use crate::dates::{apply_date_roll, first_of_month};
 use crate::export::{self, BoardRect};
 use crate::history::History;
 use crate::model::{BoardDocument, Column, ThemeMode};
@@ -10,7 +10,7 @@ use crate::theme;
 use crate::ui::dialogs;
 use crate::ui::input::{self, TextInput};
 use crate::ui::board::BoundsSlot;
-use crate::ui::{board, footer, header};
+use crate::ui::{board, calendar, footer, header};
 use crate::zoom::{clamp_zoom, step_zoom};
 use chrono::NaiveDate;
 use gpui::{
@@ -49,7 +49,12 @@ pub enum Editing {
     None,
     ProjectName { id: String, column: Column },
     TaskTitle { id: String },
-    TaskDue { id: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CalendarOpen {
+    pub task_id: String,
+    pub visible_month: NaiveDate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,6 +101,7 @@ pub struct StatusApp {
     pub status: String,
     pub theme_dark: bool,
     pub editing: Editing,
+    pub calendar: Option<CalendarOpen>,
     pub selection: Selection,
     pub input: Entity<TextInput>,
     header_bounds: Option<Bounds<Pixels>>,
@@ -132,6 +138,7 @@ impl StatusApp {
             status,
             theme_dark,
             editing: Editing::None,
+            calendar: None,
             selection: Selection::None,
             input,
             header_bounds: None,
@@ -365,6 +372,7 @@ impl StatusApp {
         cx.bind_keys([
             KeyBinding::new("enter", CommitEdit, Some("TextInput")),
             KeyBinding::new("escape", CancelEdit, Some("TextInput")),
+            KeyBinding::new("escape", CancelEdit, Some("StatusApp")),
             KeyBinding::new("delete", DeleteSelected, Some("StatusApp")),
             KeyBinding::new("backspace", DeleteSelected, Some("StatusApp")),
             KeyBinding::new("[", MoveSelectedLeft, Some("StatusApp")),
@@ -604,6 +612,7 @@ impl StatusApp {
     }
 
     fn on_undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
+        self.calendar = None;
         if !matches!(self.editing, Editing::None) {
             self.editing = Editing::None;
             self.focus_app(window);
@@ -621,6 +630,7 @@ impl StatusApp {
     }
 
     fn on_redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
+        self.calendar = None;
         if !matches!(self.editing, Editing::None) {
             self.editing = Editing::None;
             self.focus_app(window);
@@ -641,6 +651,7 @@ impl StatusApp {
         self.view_mode = !self.view_mode;
         if self.view_mode {
             self.resizing_gutter = None;
+            self.calendar = None;
             if !matches!(self.editing, Editing::None) {
                 self.editing = Editing::None;
                 self.focus_app(window);
@@ -749,10 +760,7 @@ impl StatusApp {
     }
 
     fn editing_same_card(&self, id: &str) -> bool {
-        matches!(
-            &self.editing,
-            Editing::TaskTitle { id: e } | Editing::TaskDue { id: e } if e == id
-        )
+        matches!(&self.editing, Editing::TaskTitle { id: e } if e == id)
     }
 
     fn editing_same_section(&self, project_id: &str, column: Column) -> bool {
@@ -769,6 +777,13 @@ impl StatusApp {
         if !matches!(self.editing, Editing::None) && !self.editing_same_card(id) {
             self.commit_current(cx);
             self.focus_app(window);
+        }
+        if self
+            .calendar
+            .as_ref()
+            .is_some_and(|c| c.task_id != id)
+        {
+            self.calendar = None;
         }
         self.selection = Selection::Card { id: id.to_string() };
         if matches!(self.editing, Editing::None) {
@@ -793,6 +808,7 @@ impl StatusApp {
             self.commit_current(cx);
             self.focus_app(window);
         }
+        self.calendar = None;
         self.selection = Selection::Section {
             project_id: project_id.to_string(),
             column,
@@ -816,8 +832,9 @@ impl StatusApp {
         if !matches!(self.editing, Editing::None) {
             self.commit_current(cx);
         }
+        self.calendar = None;
         match &editing {
-            Editing::TaskTitle { id } | Editing::TaskDue { id } => {
+            Editing::TaskTitle { id } => {
                 self.selection = Selection::Card { id: id.clone() };
             }
             Editing::ProjectName { id, column } => {
@@ -870,13 +887,61 @@ impl StatusApp {
         self.begin_edit(Editing::TaskTitle { id: id.to_string() }, title, window, cx);
     }
 
-    pub fn start_edit_task_due(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let draft = self
+    pub fn open_calendar(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view_mode {
+            return;
+        }
+        if !matches!(self.editing, Editing::None) {
+            self.commit_current(cx);
+        }
+        let due = self
             .board
             .task(id)
-            .map(|t| display_date(t.due, Self::today()))
-            .unwrap_or_default();
-        self.begin_edit(Editing::TaskDue { id: id.to_string() }, draft, window, cx);
+            .map(|t| t.due)
+            .unwrap_or_else(Self::today);
+        self.calendar = Some(CalendarOpen {
+            task_id: id.to_string(),
+            visible_month: first_of_month(due),
+        });
+        self.selection = Selection::Card {
+            id: id.to_string(),
+        };
+        self.focus_app(window);
+        cx.notify();
+    }
+
+    pub fn shift_calendar(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(cal) = self.calendar.as_mut() {
+            cal.visible_month = crate::dates::shift_month(cal.visible_month, delta);
+            self.focus_app(window);
+            cx.notify();
+        }
+    }
+
+    pub fn pick_calendar_date(
+        &mut self,
+        date: NaiveDate,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(cal) = self.calendar.take() else {
+            return;
+        };
+        let before = self.board.clone();
+        self.board.set_task_due(&cal.task_id, date);
+        if self.board != before {
+            self.history.push(self.board.clone());
+            self.persist_now();
+        }
+        self.focus_app(window);
+        cx.notify();
+    }
+
+    pub fn close_calendar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.calendar.take().is_some() {
+            self.focus_app(window);
+            cx.notify();
+        }
     }
 
     pub fn add_task_at(
@@ -1104,11 +1169,6 @@ impl StatusApp {
             Editing::TaskTitle { id } => {
                 self.board.set_task_title(&id, draft);
             }
-            Editing::TaskDue { id } => {
-                if let Some(parsed) = parse_date(&draft, Self::today()) {
-                    self.board.set_task_due(&id, parsed);
-                }
-            }
         }
         if self.board != before {
             self.history.push(self.board.clone());
@@ -1127,6 +1187,11 @@ impl StatusApp {
     }
 
     fn cancel_edit(&mut self, _: &CancelEdit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.calendar.take().is_some() {
+            self.focus_app(window);
+            cx.notify();
+            return;
+        }
         if matches!(self.editing, Editing::None) {
             return;
         }
@@ -1142,6 +1207,11 @@ impl StatusApp {
         cx: &mut Context<Self>,
     ) {
         if self.input.read(cx).contains_point(event.position) {
+            return;
+        }
+        if self.calendar.take().is_some() {
+            self.focus_app(window);
+            cx.notify();
             return;
         }
         if !matches!(self.editing, Editing::None) {
@@ -1195,11 +1265,17 @@ impl Render for StatusApp {
         let view_mode = self.view_mode;
         let theme_dark = self.theme_dark;
         let board_view_look = self.board_view_look();
+        let calendar_open = self.calendar.clone();
+        let selected_due = calendar_open
+            .as_ref()
+            .and_then(|cal| self.board.task(&cal.task_id).map(|t| t.due))
+            .unwrap_or(today);
 
-        div()
+        let mut root = div()
             .id("status-app-root")
             .key_context("StatusApp")
             .track_focus(&self.focus_handle)
+            .relative()
             .flex()
             .flex_col()
             .size_full()
@@ -1237,8 +1313,28 @@ impl Render for StatusApp {
             ))
             .child(board::RecordBounds::new(
                 BoundsSlot::Footer,
-                app,
+                app.clone(),
                 footer::Footer(&theme, status),
-            ))
+            ));
+
+        if let Some(cal) = calendar_open {
+            root = root.child(
+                div()
+                    .id("calendar-overlay")
+                    .absolute()
+                    .top(px(56.))
+                    .right(px(12.))
+                    .occlude()
+                    .child(calendar::CalendarPanel(
+                        &theme,
+                        cal.visible_month,
+                        selected_due,
+                        today,
+                        app,
+                    )),
+            );
+        }
+
+        root
     }
 }
