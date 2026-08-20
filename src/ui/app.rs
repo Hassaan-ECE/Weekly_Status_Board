@@ -1107,7 +1107,8 @@ impl StatusApp {
         if dy == px(0.) {
             return;
         }
-        let dir = if dy < px(0.) { 1 } else { -1 };
+        // Wheel up (positive dy on this Windows GPUI build) zooms in.
+        let dir = if dy > px(0.) { 1 } else { -1 };
         self.board.zoom = step_zoom(self.board.zoom, dir);
         self.persist_now();
         cx.stop_propagation();
