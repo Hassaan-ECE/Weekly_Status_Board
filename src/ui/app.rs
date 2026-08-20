@@ -375,6 +375,8 @@ impl StatusApp {
             KeyBinding::new("ctrl-shift-s", SaveAs, Some("StatusApp")),
             KeyBinding::new("ctrl-z", Undo, Some("StatusApp")),
             KeyBinding::new("ctrl-y", Redo, Some("StatusApp")),
+            KeyBinding::new("ctrl-z", Undo, Some("TextInput")),
+            KeyBinding::new("ctrl-y", Redo, Some("TextInput")),
         ]);
     }
 
@@ -601,25 +603,37 @@ impl StatusApp {
         .detach();
     }
 
-    fn on_undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.editing, Editing::None) {
+            self.editing = Editing::None;
+            self.focus_app(window);
+            cx.notify();
+            return;
+        }
         let Some(prev) = self.history.undo(self.board.clone()) else {
             return;
         };
         self.board = prev;
         self.sync_theme_dark();
-        self.editing = Editing::None;
         self.persist_now();
+        self.focus_app(window);
         cx.notify();
     }
 
-    fn on_redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.editing, Editing::None) {
+            self.editing = Editing::None;
+            self.focus_app(window);
+            cx.notify();
+            return;
+        }
         let Some(next) = self.history.redo(self.board.clone()) else {
             return;
         };
         self.board = next;
         self.sync_theme_dark();
-        self.editing = Editing::None;
         self.persist_now();
+        self.focus_app(window);
         cx.notify();
     }
 
@@ -734,9 +748,27 @@ impl StatusApp {
         self.focus_handle.focus(window);
     }
 
+    fn editing_same_card(&self, id: &str) -> bool {
+        matches!(
+            &self.editing,
+            Editing::TaskTitle { id: e } | Editing::TaskDue { id: e } if e == id
+        )
+    }
+
+    fn editing_same_section(&self, project_id: &str, column: Column) -> bool {
+        matches!(
+            &self.editing,
+            Editing::ProjectName { id, column: c } if id == project_id && *c == column
+        )
+    }
+
     pub fn select_card(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.view_mode {
             return;
+        }
+        if !matches!(self.editing, Editing::None) && !self.editing_same_card(id) {
+            self.commit_current(cx);
+            self.focus_app(window);
         }
         self.selection = Selection::Card { id: id.to_string() };
         if matches!(self.editing, Editing::None) {
@@ -754,6 +786,12 @@ impl StatusApp {
     ) {
         if self.view_mode {
             return;
+        }
+        if !matches!(self.editing, Editing::None)
+            && !self.editing_same_section(project_id, column)
+        {
+            self.commit_current(cx);
+            self.focus_app(window);
         }
         self.selection = Selection::Section {
             project_id: project_id.to_string(),
@@ -927,9 +965,17 @@ impl StatusApp {
         cx.notify();
     }
 
-    pub fn delete_card(&mut self, id: &str, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.view_mode || !matches!(self.editing, Editing::None) {
+    pub fn delete_card(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view_mode {
             return;
+        }
+        if !matches!(self.editing, Editing::None) {
+            if self.editing_same_card(id) {
+                self.editing = Editing::None;
+            } else {
+                self.commit_current(cx);
+            }
+            self.focus_app(window);
         }
         self.board.delete_task(id);
         self.history.push(self.board.clone());
@@ -945,8 +991,16 @@ impl StatusApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.view_mode || !matches!(self.editing, Editing::None) {
+        if self.view_mode {
             return;
+        }
+        if !matches!(self.editing, Editing::None) {
+            if self.editing_same_section(project_id, column) {
+                self.editing = Editing::None;
+            } else {
+                self.commit_current(cx);
+            }
+            self.focus_app(window);
         }
         let project_id = project_id.to_string();
         let has_tasks = !self.board.tasks_in(&project_id, column).is_empty();
@@ -976,7 +1030,11 @@ impl StatusApp {
     }
 
     fn delete_selected(&mut self, _: &DeleteSelected, window: &mut Window, cx: &mut Context<Self>) {
-        if self.view_mode || !matches!(self.editing, Editing::None) {
+        if self.view_mode {
+            return;
+        }
+        if !matches!(self.editing, Editing::None) {
+            // Delete/Backspace while typing should edit the field, not the card.
             return;
         }
         match self.selection.clone() {
