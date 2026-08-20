@@ -52,10 +52,12 @@ pub fn Card(
             .cursor_pointer()
             .child(title)
             .when(!view_mode, |el| {
-                el.on_click(move |_, window, cx| {
-                    app_title.update(cx, |app, cx| {
-                        app.start_edit_task_title(&tid, window, cx);
-                    });
+                el.on_click(move |event, window, cx| {
+                    if event.click_count() >= 2 {
+                        app_title.update(cx, |app, cx| {
+                            app.start_edit_task_title(&tid, window, cx);
+                        });
+                    }
                 })
             })
             .into_any_element()
@@ -87,10 +89,12 @@ pub fn Card(
             .cursor_pointer()
             .child(date)
             .when(!view_mode, |el| {
-                el.on_click(move |_, window, cx| {
-                    app_due.update(cx, |app, cx| {
-                        app.start_edit_task_due(&tid, window, cx);
-                    });
+                el.on_click(move |event, window, cx| {
+                    if event.click_count() >= 2 {
+                        app_due.update(cx, |app, cx| {
+                            app.start_edit_task_due(&tid, window, cx);
+                        });
+                    }
                 })
             })
             .into_any_element()
@@ -117,6 +121,27 @@ pub fn Card(
         .child(date_el);
 
     if selected && !view_mode {
+        let app_del = app.clone();
+        let tid_del = task_id.clone();
+        card = card.child(
+            div()
+                .id(SharedString::from(format!("delete-{}", task_id)))
+                .flex_none()
+                .px_1()
+                .py_0p5()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.fill_4))
+                .text_xs()
+                .text_color(theme.muted)
+                .child("×")
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    app_del.update(cx, |app, cx| {
+                        app.delete_card(&tid_del, window, cx);
+                    });
+                }),
+        );
         if let Some(dest) = task_column.left() {
             let app_left = app.clone();
             card = card.child(
@@ -164,6 +189,7 @@ pub fn Card(
         let tid_sel = task_id.clone();
         card = card
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
                 app_sel.update(cx, |app, cx| {
                     app.select_card(&tid_sel, window, cx);
                 });

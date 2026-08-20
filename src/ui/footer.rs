@@ -12,23 +12,23 @@ pub fn Footer(theme: &Theme, status: SharedString) -> impl IntoElement {
         .w_full()
         .flex_none()
         .px_3()
-        .py_2()
+        .py_1()
         .border_t_1()
         .border_color(theme.border)
         .bg(theme.background)
         .child(
             div()
                 .flex_1()
-                .text_sm()
+                .text_xs()
                 .text_color(theme.muted)
                 .child(status),
         )
         .child(
             div()
                 .flex_none()
-                .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.foreground)
+                .text_xs()
+                .font_weight(FontWeight::NORMAL)
+                .text_color(theme.muted)
                 .child("Built by Syed Hassaan Shah"),
         )
 }

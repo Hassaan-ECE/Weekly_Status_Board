@@ -16,7 +16,7 @@ use chrono::NaiveDate;
 use gpui::{
     actions, div, prelude::*, px, rgb, Bounds, ClipboardItem, Context, Entity, FocusHandle,
     Focusable, FontWeight, Image, ImageFormat, KeyBinding, MouseButton, MouseDownEvent, Pixels,
-    Point, SharedString, Window,
+    Point, ScrollWheelEvent, SharedString, Window,
 };
 use std::path::PathBuf;
 
@@ -926,6 +926,54 @@ impl StatusApp {
         cx.notify();
     }
 
+    pub fn delete_card(&mut self, id: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.view_mode || !matches!(self.editing, Editing::None) {
+            return;
+        }
+        self.board.delete_task(id);
+        self.history.push(self.board.clone());
+        self.persist_now();
+        self.selection = Selection::None;
+        cx.notify();
+    }
+
+    pub fn delete_section(
+        &mut self,
+        project_id: &str,
+        column: Column,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode || !matches!(self.editing, Editing::None) {
+            return;
+        }
+        let project_id = project_id.to_string();
+        let has_tasks = !self.board.tasks_in(&project_id, column).is_empty();
+        if !has_tasks {
+            self.board.delete_section(&project_id, column);
+            self.history.push(self.board.clone());
+            self.persist_now();
+            self.selection = Selection::None;
+            cx.notify();
+            return;
+        }
+        let answer = dialogs::confirm_delete_section(window, cx);
+        cx.spawn(async move |this, cx| {
+            if answer.await.ok() != Some(1) {
+                return;
+            }
+            this.update(cx, |app, cx| {
+                app.board.delete_section(&project_id, column);
+                app.history.push(app.board.clone());
+                app.persist_now();
+                app.selection = Selection::None;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn delete_selected(&mut self, _: &DeleteSelected, window: &mut Window, cx: &mut Context<Self>) {
         if self.view_mode || !matches!(self.editing, Editing::None) {
             return;
@@ -933,37 +981,10 @@ impl StatusApp {
         match self.selection.clone() {
             Selection::None => {}
             Selection::Card { id } => {
-                self.board.delete_task(&id);
-                self.history.push(self.board.clone());
-                self.persist_now();
-                self.selection = Selection::None;
-                cx.notify();
+                self.delete_card(&id, window, cx);
             }
             Selection::Section { project_id, column } => {
-                let has_tasks = !self.board.tasks_in(&project_id, column).is_empty();
-                if !has_tasks {
-                    self.board.delete_section(&project_id, column);
-                    self.history.push(self.board.clone());
-                    self.persist_now();
-                    self.selection = Selection::None;
-                    cx.notify();
-                    return;
-                }
-                let answer = dialogs::confirm_delete_section(window, cx);
-                cx.spawn(async move |this, cx| {
-                    if answer.await.ok() != Some(1) {
-                        return;
-                    }
-                    this.update(cx, |app, cx| {
-                        app.board.delete_section(&project_id, column);
-                        app.history.push(app.board.clone());
-                        app.persist_now();
-                        app.selection = Selection::None;
-                        cx.notify();
-                    })
-                    .ok();
-                })
-                .detach();
+                self.delete_section(&project_id, column, window, cx);
             }
         }
     }
@@ -1061,14 +1082,31 @@ impl StatusApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(self.editing, Editing::None) {
-            return;
-        }
         if self.input.read(cx).contains_point(event.position) {
             return;
         }
-        self.commit_current(cx);
+        if !matches!(self.editing, Editing::None) {
+            self.commit_current(cx);
+        }
+        self.selection = Selection::None;
         self.focus_app(window);
+        cx.notify();
+    }
+
+    fn on_scroll_wheel(
+        &mut self,
+        event: &ScrollWheelEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !event.modifiers.control {
+            return;
+        }
+        let dy = event.delta.pixel_delta(px(16.)).y;
+        let dir = if dy < px(0.) { 1 } else { -1 };
+        self.board.zoom = step_zoom(self.board.zoom, dir);
+        self.persist_now();
+        cx.stop_propagation();
         cx.notify();
     }
 }
@@ -1118,6 +1156,7 @@ impl Render for StatusApp {
             .on_action(cx.listener(Self::on_undo))
             .on_action(cx.listener(Self::on_redo))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_click_away))
+            .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
             .child(board::RecordBounds::new(
                 BoundsSlot::Header,
                 app.clone(),

@@ -109,10 +109,12 @@ fn project_section(
             .cursor_pointer()
             .child(name)
             .when(!view_mode, |el| {
-                el.on_click(move |_, window, cx| {
-                    app_name.update(cx, |app, cx| {
-                        app.start_edit_project_name(&pid_name, column, window, cx);
-                    });
+                el.on_click(move |event, window, cx| {
+                    if event.click_count() >= 2 {
+                        app_name.update(cx, |app, cx| {
+                            app.start_edit_project_name(&pid_name, column, window, cx);
+                        });
+                    }
                 })
             })
             .into_any_element()
@@ -143,10 +145,39 @@ fn project_section(
         let app_sel = app.clone();
         let pid_sel = pid.clone();
         header = header.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            cx.stop_propagation();
             app_sel.update(cx, |app, cx| {
                 app.select_section(&pid_sel, column, window, cx);
             });
         });
+
+        if selected {
+            let app_del = app.clone();
+            let pid_del = pid.clone();
+            header = header.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "delete-section-{}-{}",
+                        project_id,
+                        column.index()
+                    )))
+                    .flex_none()
+                    .px_1()
+                    .py_0p5()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.border))
+                    .text_xs()
+                    .text_color(theme.muted)
+                    .child("×")
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        app_del.update(cx, |app, cx| {
+                            app.delete_section(&pid_del, column, window, cx);
+                        });
+                    }),
+            );
+        }
 
         let app_add = app.clone();
         let pid_add = pid.clone();

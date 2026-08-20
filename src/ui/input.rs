@@ -2,11 +2,11 @@
 use std::ops::Range;
 
 use gpui::{
-    actions, black, div, fill, hsla, point, prelude::*, px, relative, rgba, size, white, App,
-    Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
-    SharedString, Style, TextRun, UnderlineStyle, UTF16Selection, Window,
+    actions, div, fill, hsla, point, prelude::*, px, relative, rgba, size, App, Bounds,
+    ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler,
+    FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style,
+    TextRun, UnderlineStyle, UTF16Selection, Window,
 };
 use unicode_segmentation::*;
 
@@ -53,7 +53,7 @@ impl TextInput {
             focus_handle: cx.focus_handle(),
             content,
             placeholder: placeholder.into(),
-            selected_range: 0..len,
+            selected_range: len..len,
             selection_reversed: false,
             marked_range: None,
             last_layout: None,
@@ -70,7 +70,7 @@ impl TextInput {
         let content: SharedString = text.into();
         let len = content.len();
         self.content = content;
-        self.selected_range = 0..len;
+        self.selected_range = len..len;
         self.selection_reversed = false;
         self.marked_range = None;
         self.last_layout = None;
@@ -536,7 +536,7 @@ impl Element for TextElement {
                         point(bounds.left() + cursor_pos, bounds.top()),
                         size(px(2.), bounds.bottom() - bounds.top()),
                     ),
-                    gpui::blue(),
+                    style.color,
                 )),
             )
         } else {
@@ -632,12 +632,6 @@ impl Render for TextInput {
                 div()
                     .w_full()
                     .min_w_0()
-                    .px_1()
-                    .py_0p5()
-                    .rounded(px(4.))
-                    .border_1()
-                    .border_color(black())
-                    .bg(white())
                     .child(TextElement {
                         input: cx.entity(),
                     }),
